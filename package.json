@@ -1,0 +1,16 @@
+{
+  "name": "gestao-notas-fiscais",
+  "version": "0.1.0",
+  "description": "Sistema de gestão de solicitações de notas fiscais para clientes de escritório de contabilidade",
+  "main": "src/server.js",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "license": "UNLICENSED"
+}
