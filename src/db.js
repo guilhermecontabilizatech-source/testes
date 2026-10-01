@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS ocorrencias (
 );
 CREATE INDEX IF NOT EXISTS idx_ocorrencias_empresa_data ON ocorrencias(empresa_id, data);
 
+CREATE TABLE IF NOT EXISTS ocorrencia_anexos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ocorrencia_id INTEGER NOT NULL REFERENCES ocorrencias(id) ON DELETE CASCADE,
+  nome_arquivo TEXT NOT NULL,
+  arquivo TEXT NOT NULL,
+  tipo_mime TEXT NOT NULL,
+  tamanho INTEGER NOT NULL,
+  enviado_por INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS anexos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   solicitacao_id INTEGER NOT NULL REFERENCES solicitacoes(id) ON DELETE CASCADE,
@@ -100,6 +111,13 @@ const COLUNAS_NOVAS = {
     plano_nome: 'TEXT',
     notas_incluidas: 'INTEGER',
     honorario_centavos: 'INTEGER',
+  },
+  solicitacoes: {
+    data_emissao: 'TEXT',
+  },
+  ocorrencias: {
+    tributo: 'TEXT',
+    competencia: 'TEXT',
   },
 };
 

@@ -218,6 +218,7 @@ async function telaPainel(query) {
       h('h1', {}, ehEscritorio ? 'Painel de solicitações' : `Minhas solicitações — ${usuario.empresa?.razao_social ?? ''}`),
       h('div', { class: 'acoes', style: { marginTop: 0 } },
         h('a', { class: 'botao secundario', href: `/api/solicitacoes.csv?${filtros}` }, 'Exportar CSV'),
+        ehEscritorio && h('button', { class: 'secundario', onclick: () => abrirDialogoNota() }, 'Registrar nota emitida (XML)'),
         h('a', { class: 'botao', href: '#/nova' }, '+ Nova solicitação'))),
     indicadores, barraFiltros, tabela);
 }
@@ -350,6 +351,7 @@ async function telaDetalhe(id) {
             item('Valor', moeda(s.valor_centavos)),
             item('Competência', data(s.data_competencia)),
             item('Nº da nota', s.numero_nota),
+            item('Data de emissão', data(s.data_emissao)),
             item('Responsável no escritório', s.responsavel_nome),
             item('Descrição', s.descricao, true))),
         h('div', { class: 'cartao' },
@@ -396,59 +398,64 @@ async function telaDetalhe(id) {
           h('div', { class: 'acoes', style: { marginTop: '8px' } }, h('button', { type: 'submit', class: 'secundario' }, 'Enviar')))))));
 }
 
+function abrirDialogo(...conteudoDialogo) {
+  const dialogo = h('dialog', {}, ...conteudoDialogo);
+  dialogo.addEventListener('close', () => dialogo.remove());
+  document.body.append(dialogo);
+  dialogo.showModal();
+  return dialogo;
+}
+
+function abrirFormularioEmpresa(e = {}) {
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      const corpo = { ...dados, ativo: dados.ativo === '1', plano_notas: dados.plano_notas === '1' };
+      if (e.id) await api(`/api/empresas/${e.id}`, { metodo: 'PUT', dados: corpo });
+      else await api('/api/empresas', { metodo: 'POST', dados: corpo });
+      dialogo.close();
+      avisar('Empresa salva.');
+      rotear();
+    }),
+  },
+  h('h2', {}, e.id ? 'Editar empresa' : 'Nova empresa cliente'),
+  h('div', { class: 'grade' },
+    campo('Razão social *', { name: 'razao_social', required: true, valor: e.razao_social }, { inteira: true }),
+    campo('CNPJ *', { name: 'cnpj', required: true, valor: documento(e.cnpj) }),
+    campo('Telefone', { name: 'telefone', valor: e.telefone }),
+    campo('E-mail', { type: 'email', name: 'email', valor: e.email }, { inteira: true }),
+    campo('Situação', { tag: 'select', name: 'ativo', valor: e.ativo === 0 ? '0' : '1', opcoes: [['1', 'Ativa'], ['0', 'Inativa']] }),
+    campo('Honorário mensal (R$)', { name: 'honorario', inputmode: 'decimal', placeholder: '0,00',
+      valor: e.honorario_centavos == null ? '' : (e.honorario_centavos / 100).toFixed(2).replace('.', ',') })),
+  h('h3', {}, 'Plano de emissão de notas'),
+  h('div', { class: 'grade' },
+    campo('Tem plano de notas?', { tag: 'select', name: 'plano_notas', valor: e.plano_notas ? '1' : '0', opcoes: [['0', 'Não'], ['1', 'Sim']] }),
+    campo('Notas incluídas por mês', { type: 'number', name: 'notas_incluidas', min: 0, step: 1, valor: e.notas_incluidas ?? '', placeholder: 'Deixe vazio se não houver limite' }),
+    campo('Nome do plano', { name: 'plano_nome', maxlength: 100, valor: e.plano_nome, placeholder: 'Ex.: Simples Nacional — Essencial' }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
 async function telaEmpresas() {
   const empresas = await api('/api/empresas');
-
-  const abrirFormulario = (e = {}) => {
-    const dialogo = h('dialog', {},
-      h('form', {
-        onsubmit: aoEnviar(async (dados) => {
-          const corpo = { ...dados, ativo: dados.ativo === '1', plano_notas: dados.plano_notas === '1' };
-          if (e.id) await api(`/api/empresas/${e.id}`, { metodo: 'PUT', dados: corpo });
-          else await api('/api/empresas', { metodo: 'POST', dados: corpo });
-          dialogo.close();
-          avisar('Empresa salva.');
-          rotear();
-        }),
-      },
-      h('h2', {}, e.id ? 'Editar empresa' : 'Nova empresa cliente'),
-      h('div', { class: 'grade' },
-        campo('Razão social *', { name: 'razao_social', required: true, valor: e.razao_social }, { inteira: true }),
-        campo('CNPJ *', { name: 'cnpj', required: true, valor: documento(e.cnpj) }),
-        campo('Telefone', { name: 'telefone', valor: e.telefone }),
-        campo('E-mail', { type: 'email', name: 'email', valor: e.email }, { inteira: true }),
-        campo('Situação', { tag: 'select', name: 'ativo', valor: e.ativo === 0 ? '0' : '1', opcoes: [['1', 'Ativa'], ['0', 'Inativa']] }),
-        campo('Honorário mensal (R$)', { name: 'honorario', inputmode: 'decimal', placeholder: '0,00',
-          valor: e.honorario_centavos == null ? '' : (e.honorario_centavos / 100).toFixed(2).replace('.', ',') })),
-      h('h3', {}, 'Plano de emissão de notas'),
-      h('div', { class: 'grade' },
-        campo('Tem plano de notas?', { tag: 'select', name: 'plano_notas', valor: e.plano_notas ? '1' : '0', opcoes: [['0', 'Não'], ['1', 'Sim']] }),
-        campo('Notas incluídas por mês', { type: 'number', name: 'notas_incluidas', min: 0, step: 1, valor: e.notas_incluidas ?? '', placeholder: 'Deixe vazio se não houver limite' }),
-        campo('Nome do plano', { name: 'plano_nome', maxlength: 100, valor: e.plano_nome, placeholder: 'Ex.: Simples Nacional — Essencial' }, { inteira: true })),
-      h('div', { class: 'acoes' },
-        h('button', { type: 'submit' }, 'Salvar'),
-        h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
-    dialogo.addEventListener('close', () => dialogo.remove());
-    document.body.append(dialogo);
-    dialogo.showModal();
-  };
-
   renderizar(
     h('div', { class: 'cabecalho-pagina' },
       h('h1', {}, 'Empresas clientes'),
-      h('button', { onclick: () => abrirFormulario() }, '+ Nova empresa')),
+      h('button', { onclick: () => abrirFormularioEmpresa() }, '+ Nova empresa')),
     empresas.length
       ? h('div', { class: 'tabela' }, h('table', {},
         h('thead', {}, h('tr', {}, ['Razão social', 'CNPJ', 'Plano de notas', 'Contato', 'Usuários', 'Em aberto', 'Situação', ''].map((t) => h('th', {}, t)))),
         h('tbody', {}, empresas.map((e) => h('tr', {},
-          h('td', {}, e.razao_social),
+          h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social)),
           h('td', {}, documento(e.cnpj)),
           h('td', {}, descricaoPlano(e)),
           h('td', {}, e.email ?? '', h('div', { class: 'suave' }, e.telefone ?? '')),
           h('td', {}, e.usuarios),
           h('td', {}, h('a', { href: `#/?empresa_id=${e.id}` }, e.abertas)),
           h('td', {}, e.ativo ? 'Ativa' : 'Inativa'),
-          h('td', {}, h('button', { class: 'secundario', onclick: () => abrirFormulario(e) }, 'Editar')))))))
+          h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
+            h('a', { class: 'botao', href: `#/empresa/${e.id}` }, 'Abrir perfil'),
+            h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar'))))))))
       : h('div', { class: 'cartao vazio' }, 'Cadastre a primeira empresa cliente para começar.'));
 }
 
@@ -471,49 +478,233 @@ function filtrosNaUrl(rota, dados) {
   location.hash = `#/${rota}?${novo}`;
 }
 
-async function telaOcorrencias(query) {
-  const filtros = new URLSearchParams(query);
-  const [opcoes, empresas, lista] = await Promise.all([
-    api('/api/ocorrencias/opcoes'),
-    api('/api/empresas'),
-    api(`/api/ocorrencias?${filtros}`),
-  ]);
-  const opcoesEmpresa = empresas.filter((e) => e.ativo).map((e) => [e.id, e.razao_social]);
-  const motivosDe = (tipo) => Object.entries(opcoes.motivos[tipo]);
+const ehXml = (arquivo) => /xml/.test(arquivo.type) || /\.xml$/i.test(arquivo.name);
 
-  const selectMotivo = campo('Motivo *', { tag: 'select', name: 'motivo', required: true, opcoes: motivosDe('multa') });
-  const campoValor = campo('Valor da multa (R$)', { name: 'valor', inputmode: 'decimal', placeholder: '0,00' });
+// Lê os arquivos escolhidos num <input type=file> no formato que a API espera.
+async function lerArquivosSelecionados(input) {
+  const arquivos = [...input.files];
+  for (const a of arquivos) if (a.size > 10 * 1024 * 1024) throw new Error(`Arquivo maior que 10 MB: ${a.name}`);
+  return Promise.all(arquivos.map(async (a) => ({
+    nome_arquivo: a.name,
+    tipo_mime: a.type || (ehXml(a) ? 'application/xml' : ''),
+    conteudo_base64: await lerArquivoBase64(a),
+  })));
+}
+
+let opcoesOcorrencia = null;
+async function obterOpcoesOcorrencia() {
+  opcoesOcorrencia ??= await api('/api/ocorrencias/opcoes');
+  return opcoesOcorrencia;
+}
+
+const ROTULO_ACAO_OCORRENCIA = { guia_recalculada: 'Registrar guia recalculada', multa: 'Registrar multa' };
+
+// Formulário de guia recalculada / multa, com anexo da guia. Usado na tela de
+// ocorrências e no perfil do cliente.
+function formularioOcorrencia({ opcoes, empresas, empresaFixa = null, tipoFixo = null, aoSalvar, classe = null }) {
+  const motivosDe = (tipo) => Object.entries(opcoes.motivos[tipo]);
+  const tipoInicial = tipoFixo ?? 'multa';
+  const selectMotivo = campo('Motivo *', { tag: 'select', name: 'motivo', required: true, opcoes: [['', 'Selecione…'], ...motivosDe(tipoInicial)] });
+  const rotuloValor = (tipo) => (tipo === 'multa' ? 'Valor da multa (R$)' : 'Acréscimo pago — juros/multa (R$)');
+  const campoValor = campo(rotuloValor(tipoInicial), { name: 'valor', inputmode: 'decimal', placeholder: '0,00' });
+  const rotuloArquivo = (tipo) => (tipo === 'multa' ? 'Guia / notificação da multa (PDF ou imagem)' : 'Guia recalculada (PDF ou imagem)');
+  const inputArquivo = h('input', { type: 'file', name: 'arquivos', multiple: true, accept: '.pdf,.png,.jpg,.jpeg,.xml' });
+  const campoArquivo = h('label', { class: 'inteira' }, rotuloArquivo(tipoInicial), inputArquivo);
   const trocarTipo = (tipo) => {
-    selectMotivo.querySelector('select').replaceChildren(...motivosDe(tipo).map(([v, t]) => h('option', { value: v }, t)));
-    campoValor.querySelector('input').placeholder = tipo === 'multa' ? '0,00' : 'Opcional (juros/multa da guia)';
-    campoValor.firstChild.textContent = tipo === 'multa' ? 'Valor da multa (R$)' : 'Valor do acréscimo (R$)';
+    selectMotivo.querySelector('select').replaceChildren(...[['', 'Selecione…'], ...motivosDe(tipo)].map(([v, t]) => h('option', { value: v }, t)));
+    campoValor.firstChild.textContent = rotuloValor(tipo);
+    campoArquivo.firstChild.textContent = rotuloArquivo(tipo);
   };
 
-  const form = h('form', {
-    class: 'cartao',
-    onsubmit: aoEnviar(async (dados, f) => {
-      await api('/api/ocorrencias', { metodo: 'POST', dados });
-      avisar(`${opcoes.tipos[dados.tipo]} registrada.`);
-      f.querySelector('[name=valor]').value = '';
-      f.querySelector('[name=descricao]').value = '';
-      rotear();
-    }),
-  },
-  h('h2', {}, 'Registrar ocorrência'),
-  h('p', { class: 'suave' }, 'Use para guias que precisaram ser recalculadas e multas recebidas. A causa ajuda a separar o que é atraso do cliente do que é falha interna.'),
-  h('div', { class: 'grade' },
-    campo('Empresa *', { tag: 'select', name: 'empresa_id', required: true, opcoes: [['', 'Selecione…'], ...opcoesEmpresa] }),
-    (() => {
-      const c = campo('Tipo *', { tag: 'select', name: 'tipo', required: true, valor: 'multa', opcoes: Object.entries(opcoes.tipos) });
+  const campoTipo = tipoFixo
+    ? h('input', { type: 'hidden', name: 'tipo', value: tipoFixo })
+    : (() => {
+      const c = campo('Tipo *', { tag: 'select', name: 'tipo', required: true, valor: tipoInicial, opcoes: Object.entries(opcoes.tipos) });
       c.querySelector('select').addEventListener('change', (ev) => trocarTipo(ev.target.value));
       return c;
-    })(),
+    })();
+  const campoEmpresa = empresaFixa
+    ? h('input', { type: 'hidden', name: 'empresa_id', value: empresaFixa.id })
+    : campo('Empresa *', { tag: 'select', name: 'empresa_id', required: true, opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo).map((e) => [e.id, e.razao_social])] });
+
+  return h('form', {
+    class: classe,
+    onsubmit: aoEnviar(async (dados, f) => {
+      delete dados.arquivos;
+      const arquivos = await lerArquivosSelecionados(inputArquivo);
+      await api('/api/ocorrencias', { metodo: 'POST', dados: { ...dados, arquivos } });
+      avisar(`${opcoes.tipos[dados.tipo]} registrada${arquivos.length ? ` com ${arquivos.length} arquivo(s)` : ''}.`);
+      f.reset();
+      aoSalvar?.();
+    }),
+  },
+  h('div', { class: 'grade' },
+    campoEmpresa,
+    campoTipo,
+    campoArquivo,
+    campo('Tributo', { tag: 'select', name: 'tributo', opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.tributos)] }),
+    campo('Competência', { type: 'month', name: 'competencia' }),
     campo('Data *', { type: 'date', name: 'data', required: true, valor: hoje() }),
     selectMotivo,
     campo('Causa *', { tag: 'select', name: 'causa', required: true, opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.causas)] }),
     campoValor,
-    campo('Descrição', { name: 'descricao', maxlength: 500, placeholder: 'Ex.: DAS competência 09/2026' }, { inteira: true })),
-  h('div', { class: 'acoes' }, h('button', { type: 'submit' }, 'Registrar')));
+    campo('Observação', { name: 'descricao', maxlength: 500, placeholder: 'Ex.: cliente avisou do pagamento só no dia 25' }, { inteira: true })),
+  h('div', { class: 'acoes' }, h('button', { type: 'submit' }, tipoFixo ? ROTULO_ACAO_OCORRENCIA[tipoFixo] : 'Registrar')));
+}
+
+async function abrirDialogoOcorrencia(tipo, empresa) {
+  const opcoes = await obterOpcoesOcorrencia();
+  const dialogo = abrirDialogo(
+    h('h2', {}, `${ROTULO_ACAO_OCORRENCIA[tipo]} — ${empresa.razao_social}`),
+    formularioOcorrencia({ opcoes, empresas: [], empresaFixa: empresa, tipoFixo: tipo, aoSalvar: () => { dialogo.close(); rotear(); } }),
+    h('div', { class: 'acoes' }, h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar')));
+}
+
+// Registro de nota já emitida: anexa XML/PDF; com XML, os dados são lidos automaticamente.
+async function abrirDialogoNota(empresaFixa = null) {
+  const empresas = empresaFixa ? [empresaFixa] : (await api('/api/empresas')).filter((e) => e.ativo);
+  const inputArquivos = h('input', { type: 'file', multiple: true, accept: '.xml,.pdf', required: true });
+  const caixaLeitura = h('div', {});
+  const selectEmpresa = empresaFixa
+    ? h('input', { type: 'hidden', name: 'empresa_id', value: empresaFixa.id })
+    : h('select', { name: 'empresa_id', required: true }, h('option', { value: '' }, 'Selecione… (ou anexe o XML)'),
+      empresas.map((e) => h('option', { value: e.id }, e.razao_social)));
+  const selectVinculo = h('select', { name: 'solicitacao_id' }, h('option', { value: '' }, 'Nenhuma: registrar como nova nota'));
+  const dadosTomador = h('div', { class: 'grade' },
+    campo('Tipo de nota *', { tag: 'select', name: 'tipo_nota', opcoes: [['NFS-e', 'NFS-e (serviço)'], ['NF-e', 'NF-e (produto)']] }),
+    campo('CPF/CNPJ do tomador *', { name: 'tomador_documento', required: true }),
+    campo('Nome do tomador *', { name: 'tomador_nome', required: true, maxlength: 200 }),
+    campo('E-mail do tomador', { type: 'email', name: 'tomador_email' }),
+    campo('Descrição *', { tag: 'textarea', name: 'descricao', required: true, maxlength: 2000 }, { inteira: true }));
+
+  const form = h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      const arquivos = await lerArquivosSelecionados(inputArquivos);
+      const r = await api('/api/notas-emitidas', { metodo: 'POST', dados: { ...dados, arquivos } });
+      dialogo.close();
+      avisar(r.vinculada ? 'Nota anexada e solicitação marcada como emitida.' : 'Nota registrada. Painel atualizado.');
+      rotear();
+    }),
+  });
+  const valorCampo = (nome) => form.querySelector(`[name=${nome}]`);
+  const preencher = (nome, v) => { if (v != null && valorCampo(nome)) valorCampo(nome).value = v; };
+
+  const atualizarVinculo = () => {
+    const vinculada = Boolean(selectVinculo.value);
+    dadosTomador.hidden = vinculada;
+    for (const el of dadosTomador.querySelectorAll('input, textarea, select')) el.disabled = vinculada;
+  };
+  selectVinculo.addEventListener('change', atualizarVinculo);
+
+  // Várias buscas podem estar em andamento (abertura da janela, troca de empresa, leitura
+  // do XML); só a mais recente atualiza a lista.
+  let ultimaBusca = 0;
+  const carregarAbertas = (abertas, sugeridaId) => {
+    selectVinculo.replaceChildren(h('option', { value: '' }, 'Nenhuma: registrar como nova nota'),
+      ...abertas.map((s) => h('option', { value: s.id, selected: s.id === sugeridaId },
+        `#${s.id} · ${s.tomador_nome} · ${moeda(s.valor_centavos)} · ${STATUS[s.status]}`)));
+    atualizarVinculo();
+  };
+  const buscarAbertas = async (empresaId) => {
+    const busca = ++ultimaBusca;
+    const abertas = empresaId ? await api(`/api/empresas/${empresaId}/solicitacoes-abertas`) : [];
+    if (busca === ultimaBusca) carregarAbertas(abertas, null);
+  };
+  if (!empresaFixa) selectEmpresa.addEventListener('change', () => buscarAbertas(selectEmpresa.value).catch(() => {}));
+
+  inputArquivos.addEventListener('change', async () => {
+    caixaLeitura.replaceChildren();
+    const xml = [...inputArquivos.files].find(ehXml);
+    if (!xml) return buscarAbertas(selectEmpresa.value).catch(() => {});
+    const busca = ++ultimaBusca;
+    try {
+      const r = await api('/api/notas/ler-xml', {
+        metodo: 'POST',
+        dados: { conteudo_base64: await lerArquivoBase64(xml), empresa_id: selectEmpresa.value || null },
+      });
+      if (busca !== ultimaBusca) return;
+      const d = r.dados;
+      if (!empresaFixa && r.empresa_id) selectEmpresa.value = r.empresa_id;
+      preencher('numero_nota', d.numero);
+      preencher('data_emissao', d.data_emissao);
+      preencher('valor', d.valor_centavos == null ? null : (d.valor_centavos / 100).toFixed(2).replace('.', ','));
+      preencher('tipo_nota', d.tipo_nota);
+      preencher('tomador_documento', documento(d.tomador_documento));
+      preencher('tomador_nome', d.tomador_nome);
+      preencher('tomador_email', d.tomador_email);
+      preencher('descricao', d.descricao);
+      carregarAbertas(r.abertas, r.sugerida_id);
+      caixaLeitura.append(h('div', { class: 'alerta sucesso' },
+        `XML lido (${d.formato}): nota nº ${d.numero ?? '?'}, ${d.tomador_nome ?? 'tomador não identificado'}, ${d.valor_centavos == null ? 'valor não identificado' : moeda(d.valor_centavos)}.`,
+        r.sugerida_id ? h('div', {}, `Vinculada automaticamente à solicitação #${r.sugerida_id} em aberto.`) : null));
+      for (const aviso of r.avisos) caixaLeitura.append(h('div', { class: 'alerta erro' }, aviso));
+    } catch (err) {
+      caixaLeitura.append(h('div', { class: 'alerta info' }, err.message));
+      buscarAbertas(selectEmpresa.value).catch(() => {});
+    }
+  });
+
+  form.append(
+    h('div', { class: 'grade' },
+      h('label', { class: 'inteira' }, 'Arquivos da nota (XML e/ou PDF) *', inputArquivos),
+      empresaFixa ? selectEmpresa : h('label', { class: 'inteira' }, 'Empresa emissora *', selectEmpresa)),
+    h('p', { class: 'suave peq' }, 'Com o XML, número, data, valor e tomador são preenchidos sozinhos e a empresa é identificada pelo CNPJ do emitente.'),
+    caixaLeitura,
+    h('div', { class: 'grade' },
+      campo('Número da nota *', { name: 'numero_nota', required: true, maxlength: 50 }),
+      campo('Data de emissão *', { type: 'date', name: 'data_emissao', required: true, valor: hoje() }),
+      campo('Valor (R$) *', { name: 'valor', required: true, inputmode: 'decimal', placeholder: '0,00' }),
+      h('label', { class: 'inteira' }, 'Atende a qual solicitação em aberto?', selectVinculo)),
+    dadosTomador,
+    h('div', { class: 'acoes' },
+      h('button', { type: 'submit' }, 'Registrar nota emitida'),
+      h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar')));
+
+  const dialogo = abrirDialogo(h('h2', {}, `Registrar nota emitida${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`), form);
+  dialogo.classList.add('largo');
+  if (empresaFixa) buscarAbertas(empresaFixa.id).catch(() => {});
+}
+
+function tabelaOcorrencias(lista, opcoes, { mostrarEmpresa = true, aoExcluir }) {
+  const excluir = async (o) => {
+    if (!confirm(`Excluir ${opcoes.tipos[o.tipo].toLowerCase()} de ${o.empresa_nome} (${data(o.data)})?`)) return;
+    try {
+      await api(`/api/ocorrencias/${o.id}`, { metodo: 'DELETE', dados: {} });
+      avisar('Ocorrência excluída.');
+      aoExcluir();
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+  };
+  const cabecalho = ['Data', mostrarEmpresa && 'Empresa', 'Tipo', 'Tributo / comp.', 'Motivo', 'Causa', 'Valor', 'Guia anexada', ''].filter((t) => t !== false);
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, cabecalho.map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+    h('tbody', {}, lista.map((o) => h('tr', {},
+      h('td', {}, data(o.data)),
+      mostrarEmpresa && h('td', {}, h('a', { href: `#/empresa/${o.empresa_id}` }, o.empresa_nome)),
+      h('td', {}, h('span', { class: 'etiqueta', style: { '--cor': o.tipo === 'multa' ? 'var(--rejeitada)' : 'var(--pendente)' } }, opcoes.tipos[o.tipo])),
+      h('td', {}, o.tributo ? opcoes.tributos[o.tributo] : '—', o.competencia ? h('div', { class: 'suave' }, `${o.competencia.slice(5)}/${o.competencia.slice(0, 4)}`) : null),
+      h('td', {}, opcoes.motivos[o.tipo][o.motivo] ?? o.motivo, o.descricao ? h('div', { class: 'suave' }, o.descricao) : null),
+      h('td', {}, opcoes.causas[o.causa]),
+      h('td', { class: 'num' }, o.valor_centavos == null ? '—' : moeda(o.valor_centavos)),
+      h('td', {}, o.anexos.length
+        ? o.anexos.map((a) => h('div', {}, h('a', { href: `/api/ocorrencias/anexos/${a.id}` }, a.nome_arquivo)))
+        : h('span', { class: 'suave' }, 'sem anexo')),
+      h('td', {}, h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir')))))));
+}
+
+async function telaOcorrencias(query) {
+  const filtros = new URLSearchParams(query);
+  const [opcoes, empresas, lista] = await Promise.all([
+    obterOpcoesOcorrencia(),
+    api('/api/empresas'),
+    api(`/api/ocorrencias?${filtros}`),
+  ]);
+
+  const form = h('div', { class: 'cartao' },
+    h('h2', {}, 'Registrar ocorrência'),
+    h('p', { class: 'suave' }, 'Anexe a guia recalculada ou a guia da multa e informe motivo e causa. Dica: pelo perfil do cliente a empresa já vem preenchida.'),
+    formularioOcorrencia({ opcoes, empresas, aoSalvar: rotear }));
 
   const barraFiltros = h('form', {
     class: 'filtros',
@@ -527,17 +718,6 @@ async function telaOcorrencias(query) {
   h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
   [...filtros].length ? h('a', { href: '#/ocorrencias', class: 'botao secundario' }, 'Limpar') : null);
 
-  const excluir = async (o) => {
-    if (!confirm(`Excluir ${opcoes.tipos[o.tipo].toLowerCase()} de ${o.empresa_nome} (${data(o.data)})?`)) return;
-    try {
-      await api(`/api/ocorrencias/${o.id}`, { metodo: 'DELETE', dados: {} });
-      avisar('Ocorrência excluída.');
-      rotear();
-    } catch (err) {
-      avisar(err.message, 'erro');
-    }
-  };
-
   const totalValor = lista.reduce((t, o) => t + (o.valor_centavos ?? 0), 0);
   renderizar(
     h('div', { class: 'cabecalho-pagina' }, h('h1', {}, 'Ocorrências: guias recalculadas e multas')),
@@ -546,18 +726,89 @@ async function telaOcorrencias(query) {
     lista.length
       ? h('div', {},
         h('p', { class: 'suave' }, `${lista.length} ocorrência(s) · total ${moeda(totalValor)}`),
-        h('div', { class: 'tabela' }, h('table', {},
-          h('thead', {}, h('tr', {}, ['Data', 'Empresa', 'Tipo', 'Motivo', 'Causa', 'Valor', 'Descrição', ''].map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
-          h('tbody', {}, lista.map((o) => h('tr', {},
-            h('td', {}, data(o.data)),
-            h('td', {}, o.empresa_nome),
-            h('td', {}, h('span', { class: `etiqueta`, style: { '--cor': o.tipo === 'multa' ? 'var(--rejeitada)' : 'var(--pendente)' } }, opcoes.tipos[o.tipo])),
-            h('td', {}, opcoes.motivos[o.tipo][o.motivo] ?? o.motivo),
-            h('td', {}, opcoes.causas[o.causa]),
-            h('td', { class: 'num' }, o.valor_centavos == null ? '—' : moeda(o.valor_centavos)),
-            h('td', {}, o.descricao ?? '', h('div', { class: 'suave' }, o.registrado_por_nome ?? '')),
-            h('td', {}, h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir'))))))))
+        tabelaOcorrencias(lista, opcoes, { aoExcluir: rotear }))
       : h('div', { class: 'cartao vazio' }, 'Nenhuma ocorrência encontrada.'));
+}
+
+async function telaPerfilEmpresa(id, query) {
+  const filtros = new URLSearchParams(query);
+  const periodo = new URLSearchParams({
+    inicio: filtros.get('inicio') || PERIODO_PADRAO.inicio,
+    fim: filtros.get('fim') || PERIODO_PADRAO.fim,
+  });
+  const [empresas, rel, notas, ocorrencias, opcoes] = await Promise.all([
+    api('/api/empresas'),
+    api(`/api/relatorio?${periodo}&empresa_id=${id}`),
+    api(`/api/solicitacoes?${periodo}&empresa_id=${id}`),
+    api(`/api/ocorrencias?${periodo}&empresa_id=${id}`),
+    obterOpcoesOcorrencia(),
+  ]);
+  const e = empresas.find((x) => String(x.id) === String(id));
+  if (!e) throw new Error('Empresa não encontrada.');
+  const r = rel.empresas[0];
+  const indicador = (numero, rotulo, cor) => h('div', { class: 'indicador', style: { '--cor': cor, cursor: 'default' } },
+    h('div', { class: 'numero' }, numero), h('div', { class: 'rotulo' }, rotulo));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('div', {},
+        h('h1', {}, e.razao_social),
+        h('div', { class: 'suave' }, `CNPJ ${documento(e.cnpj)} · `, descricaoPlanoTexto(e),
+          e.honorario_centavos != null ? ` · honorário ${moeda(e.honorario_centavos)}` : '')),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar cadastro'),
+        h('a', { href: '#/empresas' }, '← Empresas'))),
+    h('div', { class: 'acoes-rapidas' },
+      h('button', { class: 'acao-rapida', onclick: () => abrirDialogoNota(e) },
+        h('strong', {}, 'Registrar nota emitida'), h('span', {}, 'Anexe o XML/PDF: dados lidos automaticamente')),
+      h('button', { class: 'acao-rapida', onclick: () => abrirDialogoOcorrencia('guia_recalculada', e) },
+        h('strong', {}, 'Registrar guia recalculada'), h('span', {}, 'Anexe a nova guia e informe o motivo')),
+      h('button', { class: 'acao-rapida perigo', onclick: () => abrirDialogoOcorrencia('multa', e) },
+        h('strong', {}, 'Registrar multa'), h('span', {}, 'Anexe a guia da multa, motivo e causa'))),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl(`empresa/${id}`, dadosFormulario(ev.target)); },
+    },
+    campo('De', { type: 'date', name: 'inicio', required: true, valor: periodo.get('inicio') }),
+    campo('Até', { type: 'date', name: 'fim', required: true, valor: periodo.get('fim') }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Atualizar período')),
+    h('div', { class: 'indicadores' },
+      indicador(r.notas.total, `Notas no período · média ${String(r.notas.media_mensal).replace('.', ',')}/mês`, 'var(--em_emissao)'),
+      e.plano_notas && e.notas_incluidas != null
+        ? indicador(r.meses_acima_franquia, `Meses acima da franquia (${e.notas_incluidas}/mês)`, 'var(--emitida)') : null,
+      indicador(r.guias.total, `Guias recalculadas · cliente ${r.guias.cliente} · escritório ${r.guias.escritorio}`, 'var(--pendente)'),
+      indicador(r.multas.total, `Multas · ${moeda(r.multas.valor_centavos)}`, 'var(--rejeitada)')),
+    h('div', { class: 'cartao' },
+      h('h2', {}, 'Notas por mês'),
+      h('div', { class: 'meses' }, rel.meses.map((m) => {
+        const n = r.notas.por_mes[m];
+        const acima = e.plano_notas && e.notas_incluidas != null && n > e.notas_incluidas;
+        return h('div', { class: `mes${acima ? ' acima' : ''}` }, h('div', { class: 'suave' }, nomeMes(m)), h('strong', {}, n));
+      })),
+      r.sinais.length
+        ? h('ul', { class: 'sinais', style: { marginTop: '14px' } }, r.sinais.map((s) => h('li', { style: { '--cor': CORES_SINAL[s.tipo] } }, s.texto)))
+        : h('p', { class: 'suave', style: { marginTop: '12px' } }, 'Nenhum alerta neste período.')),
+    h('h2', {}, 'Notas do período'),
+    notas.length
+      ? h('div', { class: 'tabela', style: { marginBottom: '20px' } }, h('table', {},
+        h('thead', {}, h('tr', {}, ['Nº nota', 'Emissão', 'Tomador', 'Valor', 'Status', 'Arquivos'].map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+        h('tbody', {}, notas.map((s) => h('tr', { class: 'clicavel', onclick: () => { location.hash = `#/solicitacao/${s.id}`; } },
+          h('td', {}, s.numero_nota ?? '—'),
+          h('td', {}, s.data_emissao ? data(s.data_emissao) : '—'),
+          h('td', {}, s.tomador_nome, h('div', { class: 'suave' }, documento(s.tomador_documento))),
+          h('td', { class: 'num' }, moeda(s.valor_centavos)),
+          h('td', {}, etiqueta(s.status)),
+          h('td', {}, s.anexos ? `${s.anexos} arquivo(s)` : h('span', { class: 'suave' }, 'sem anexo')))))))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma nota neste período.'),
+    h('h2', {}, 'Guias recalculadas e multas do período'),
+    ocorrencias.length
+      ? tabelaOcorrencias(ocorrencias, opcoes, { mostrarEmpresa: false, aoExcluir: rotear })
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma ocorrência neste período.'));
+}
+
+function descricaoPlanoTexto(e) {
+  if (!e.plano_notas) return 'sem plano de notas';
+  return `${e.plano_nome || 'com plano'} (${e.notas_incluidas == null ? 'sem limite' : `${e.notas_incluidas} notas/mês`})`;
 }
 
 const CORES_SINAL = { upsell: 'var(--em_emissao)', cliente: 'var(--pendente)', qualidade: 'var(--rejeitada)' };
@@ -621,7 +872,7 @@ async function telaRelatorio(query) {
           h('th', { class: 'num' }, 'Guias'), h('th', { class: 'num' }, 'Multas'),
           h('th', {}, 'Alertas'))),
         h('tbody', {}, empresas.map((e) => h('tr', {},
-          h('td', {}, h('strong', {}, e.razao_social), h('div', { class: 'suave' },
+          h('td', {}, h('a', { href: `#/empresa/${e.id}` }, h('strong', {}, e.razao_social)), h('div', { class: 'suave' },
             e.plano_notas ? `${e.plano_nome || 'Com plano'} · ${e.notas_incluidas == null ? 'sem limite' : `${e.notas_incluidas}/mês`}` : 'Sem plano de notas',
             e.honorario_centavos != null ? ` · ${moeda(e.honorario_centavos)}` : '')),
           rel.meses.map((m) => {
@@ -734,7 +985,8 @@ function montarMenu(caminho) {
     itens.push(['#/ocorrencias', 'Ocorrências'], ['#/relatorio', 'Relatório'], ['#/empresas', 'Empresas'], ['#/usuarios', 'Usuários']);
   }
   document.getElementById('menu').replaceChildren(...itens.map(([href, texto]) => h('a', {
-    href, class: (href === '#/' ? caminho === '/' || caminho.startsWith('/solicitacao') : `#${caminho}` === href) ? 'ativo' : null,
+    href, class: (href === '#/' ? caminho === '/' || caminho.startsWith('/solicitacao')
+      : `#${caminho}` === href || (href === '#/empresas' && caminho.startsWith('/empresa/'))) ? 'ativo' : null,
   }, texto)));
   document.getElementById('nome-usuario').textContent = usuario.empresa
     ? `${usuario.nome} · ${usuario.empresa.razao_social}`
@@ -759,6 +1011,7 @@ async function rotear() {
     if (caminho === '/usuarios' && usuario.papel === 'escritorio') return await telaUsuarios();
     if (caminho === '/ocorrencias' && usuario.papel === 'escritorio') return await telaOcorrencias(query);
     if (caminho === '/relatorio' && usuario.papel === 'escritorio') return await telaRelatorio(query);
+    if ((m = caminho.match(/^\/empresa\/(\d+)$/)) && usuario.papel === 'escritorio') return await telaPerfilEmpresa(m[1], query);
     if (caminho === '/senha') return telaSenha();
     renderizar(h('div', { class: 'cartao vazio' }, 'Página não encontrada. ', h('a', { href: '#/' }, 'Voltar ao início')));
   } catch (err) {

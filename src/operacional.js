@@ -2,6 +2,8 @@
 
 const { ErroValidacao, texto, valorParaCentavos } = require('./validacao');
 const { paraCsv, reais } = require('./csv');
+const { transacao } = require('./db');
+const { prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 
 const TIPOS_OCORRENCIA = {
   guia_recalculada: 'Guia recalculada',
@@ -23,6 +25,17 @@ const MOTIVOS = {
     pagamento_atrasado: 'Pagamento em atraso pelo cliente',
     outro: 'Outro',
   },
+};
+
+const TRIBUTOS = {
+  das: 'DAS (Simples Nacional)',
+  darf: 'DARF (federais)',
+  dctfweb: 'DCTFWeb / INSS',
+  fgts: 'FGTS Digital',
+  iss: 'ISS',
+  icms: 'ICMS',
+  das_mei: 'DAS-MEI',
+  outro: 'Outro',
 };
 
 const CAUSAS = {
@@ -60,9 +73,16 @@ function validarOcorrencia(db, corpo) {
     if (!Number.isInteger(valor) || valor < 0) throw new ErroValidacao('Valor inválido.');
   }
 
+  const tributo = corpo.tributo || null;
+  if (tributo && !TRIBUTOS[tributo]) throw new ErroValidacao('Tributo inválido.');
+  const competencia = corpo.competencia || null;
+  if (competencia && !/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) throw new ErroValidacao('Competência inválida (use AAAA-MM).');
+
   return {
     empresa_id: empresaId,
     tipo,
+    tributo,
+    competencia,
     data,
     motivo: corpo.motivo,
     causa: corpo.causa,
@@ -87,30 +107,31 @@ function lerPeriodo(query) {
     mes += 1;
     if (mes > 12) { mes = 1; ano += 1; }
   }
-  return { inicio, fim, meses };
+  const empresaId = query.get('empresa_id') ? Number(query.get('empresa_id')) : null;
+  return { inicio, fim, meses, empresaId };
 }
 
 // Consolida, por empresa, notas solicitadas, guias recalculadas e multas no período.
-function calcularRelatorio(db, { inicio, fim, meses }) {
+function calcularRelatorio(db, { inicio, fim, meses, empresaId = null }) {
   const empresas = db.prepare(`
     SELECT id, razao_social, cnpj, ativo, plano_notas, plano_nome, notas_incluidas, honorario_centavos
-    FROM empresas ORDER BY razao_social
-  `).all();
+    FROM empresas WHERE ? IS NULL OR id = ? ORDER BY razao_social
+  `).all(empresaId, empresaId);
 
   // Datas de criação ficam em UTC; o deslocamento de -3h mantém o mês no horário de Brasília.
   const notas = db.prepare(`
     SELECT empresa_id, strftime('%Y-%m', criado_em, '-3 hours') AS mes,
            COUNT(*) AS solicitadas, SUM(status = 'emitida') AS emitidas
     FROM solicitacoes
-    WHERE status <> 'cancelada' AND date(criado_em, '-3 hours') BETWEEN ? AND ?
+    WHERE status <> 'cancelada' AND date(criado_em, '-3 hours') BETWEEN ? AND ? AND (? IS NULL OR empresa_id = ?)
     GROUP BY empresa_id, mes
-  `).all(inicio, fim);
+  `).all(inicio, fim, empresaId, empresaId);
 
   const ocorrencias = db.prepare(`
     SELECT empresa_id, tipo, causa, motivo, COUNT(*) AS quantidade, SUM(valor_centavos) AS valor
-    FROM ocorrencias WHERE data BETWEEN ? AND ?
+    FROM ocorrencias WHERE data BETWEEN ? AND ? AND (? IS NULL OR empresa_id = ?)
     GROUP BY empresa_id, tipo, causa, motivo
-  `).all(inicio, fim);
+  `).all(inicio, fim, empresaId, empresaId);
 
   const porEmpresa = new Map(empresas.map((e) => [e.id, {
     id: e.id,
@@ -174,7 +195,7 @@ function calcularRelatorio(db, { inicio, fim, meses }) {
   const resultado = [];
   for (const e of porEmpresa.values()) {
     const temDados = e.notas.total || e.guias.total || e.multas.total;
-    if (!e.ativo && !temDados) continue;
+    if (!e.ativo && !temDados && empresaId == null) continue;
 
     e.notas.media_mensal = Math.round((e.notas.total / meses.length) * 10) / 10;
     if (e.plano_notas && e.notas_incluidas != null) {
@@ -236,10 +257,29 @@ function relatorioCsv(rel) {
   return paraCsv([cab, ...linhas]);
 }
 
-function registrarRotasOperacionais({ rota, db }) {
+function registrarRotasOperacionais({ rota, db, pastaArquivos }) {
   const soEscritorio = { papel: 'escritorio' };
 
-  rota('GET', '/api/ocorrencias/opcoes', () => ({ tipos: TIPOS_OCORRENCIA, motivos: MOTIVOS, causas: CAUSAS }), soEscritorio);
+  rota('GET', '/api/ocorrencias/opcoes', () => ({ tipos: TIPOS_OCORRENCIA, motivos: MOTIVOS, causas: CAUSAS, tributos: TRIBUTOS }), soEscritorio);
+
+  function anexosDasOcorrencias(ids) {
+    const porOcorrencia = new Map(ids.map((id) => [id, []]));
+    if (!ids.length) return porOcorrencia;
+    const linhas = db.prepare(`
+      SELECT id, ocorrencia_id, nome_arquivo, tipo_mime, tamanho, criado_em FROM ocorrencia_anexos
+      WHERE ocorrencia_id IN (${ids.map(() => '?').join(', ')}) ORDER BY id
+    `).all(...ids);
+    for (const a of linhas) porOcorrencia.get(a.ocorrencia_id).push({ ...a });
+    return porOcorrencia;
+  }
+
+  function inserirAnexos(ocorrenciaId, gravados, usuarioId) {
+    const ins = db.prepare(`
+      INSERT INTO ocorrencia_anexos (ocorrencia_id, nome_arquivo, arquivo, tipo_mime, tamanho, enviado_por)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (const g of gravados) ins.run(ocorrenciaId, g.nome, g.arquivo, g.tipo_mime, g.tamanho, usuarioId);
+  }
 
   rota('GET', '/api/ocorrencias', ({ query }) => {
     const condicoes = [];
@@ -250,36 +290,75 @@ function registrarRotasOperacionais({ rota, db }) {
     if (dataValida(query.get('inicio') ?? '')) { condicoes.push('o.data >= ?'); params.push(query.get('inicio')); }
     if (dataValida(query.get('fim') ?? '')) { condicoes.push('o.data <= ?'); params.push(query.get('fim')); }
     const where = condicoes.length ? `WHERE ${condicoes.join(' AND ')}` : '';
-    return db.prepare(`
+    const lista = db.prepare(`
       SELECT o.*, e.razao_social AS empresa_nome, u.nome AS registrado_por_nome
       FROM ocorrencias o JOIN empresas e ON e.id = o.empresa_id
       LEFT JOIN usuarios u ON u.id = o.registrado_por
       ${where} ORDER BY o.data DESC, o.id DESC LIMIT 1000
     `).all(...params).map((l) => ({ ...l }));
+    const anexos = anexosDasOcorrencias(lista.map((o) => o.id));
+    for (const o of lista) o.anexos = anexos.get(o.id);
+    return lista;
   }, soEscritorio);
 
   rota('POST', '/api/ocorrencias', ({ corpo, usuario }) => {
     const o = validarOcorrencia(db, corpo);
-    const r = db.prepare(`
-      INSERT INTO ocorrencias (empresa_id, tipo, data, motivo, causa, valor_centavos, descricao, registrado_por)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(o.empresa_id, o.tipo, o.data, o.motivo, o.causa, o.valor_centavos, o.descricao, usuario.id);
-    return { id: Number(r.lastInsertRowid) };
+    const { gravados, desfazer } = gravarArquivos(pastaArquivos, prepararArquivos(corpo.arquivos));
+    try {
+      const id = transacao(db, () => {
+        const r = db.prepare(`
+          INSERT INTO ocorrencias (empresa_id, tipo, tributo, competencia, data, motivo, causa, valor_centavos, descricao, registrado_por)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(o.empresa_id, o.tipo, o.tributo, o.competencia, o.data, o.motivo, o.causa, o.valor_centavos, o.descricao, usuario.id);
+        const novoId = Number(r.lastInsertRowid);
+        inserirAnexos(novoId, gravados, usuario.id);
+        return novoId;
+      });
+      return { id, anexos: gravados.length };
+    } catch (err) {
+      desfazer();
+      throw err;
+    }
   }, soEscritorio);
 
   rota('PUT', '/api/ocorrencias/:id', ({ corpo, params }) => {
     const o = validarOcorrencia(db, corpo);
     const r = db.prepare(`
-      UPDATE ocorrencias SET empresa_id = ?, tipo = ?, data = ?, motivo = ?, causa = ?, valor_centavos = ?, descricao = ?
+      UPDATE ocorrencias SET empresa_id = ?, tipo = ?, tributo = ?, competencia = ?, data = ?, motivo = ?, causa = ?,
+        valor_centavos = ?, descricao = ?
       WHERE id = ?
-    `).run(o.empresa_id, o.tipo, o.data, o.motivo, o.causa, o.valor_centavos, o.descricao, params.id);
+    `).run(o.empresa_id, o.tipo, o.tributo, o.competencia, o.data, o.motivo, o.causa, o.valor_centavos, o.descricao, params.id);
     if (!r.changes) throw new ErroValidacao('Ocorrência não encontrada.', 404);
     return { ok: true };
   }, soEscritorio);
 
+  rota('POST', '/api/ocorrencias/:id/anexos', ({ corpo, params, usuario }) => {
+    if (!db.prepare('SELECT 1 FROM ocorrencias WHERE id = ?').get(params.id)) {
+      throw new ErroValidacao('Ocorrência não encontrada.', 404);
+    }
+    const preparados = prepararArquivos(corpo.arquivos);
+    if (!preparados.length) throw new ErroValidacao('Selecione um arquivo.');
+    const { gravados, desfazer } = gravarArquivos(pastaArquivos, preparados);
+    try {
+      transacao(db, () => inserirAnexos(params.id, gravados, usuario.id));
+    } catch (err) {
+      desfazer();
+      throw err;
+    }
+    return { anexos: gravados.length };
+  }, soEscritorio);
+
+  rota('GET', '/api/ocorrencias/anexos/:id', ({ params, responderBruto }) => {
+    const a = db.prepare('SELECT * FROM ocorrencia_anexos WHERE id = ?').get(params.id);
+    if (!a) throw new ErroValidacao('Anexo não encontrado.', 404);
+    responderBruto(200, lerArquivo(pastaArquivos, a.arquivo), cabecalhosDownload(a));
+  }, soEscritorio);
+
   rota('DELETE', '/api/ocorrencias/:id', ({ params }) => {
+    const arquivos = db.prepare('SELECT arquivo FROM ocorrencia_anexos WHERE ocorrencia_id = ?').all(params.id);
     const r = db.prepare('DELETE FROM ocorrencias WHERE id = ?').run(params.id);
     if (!r.changes) throw new ErroValidacao('Ocorrência não encontrada.', 404);
+    apagarArquivos(pastaArquivos, arquivos.map((a) => a.arquivo));
     return { ok: true };
   }, soEscritorio);
 
@@ -300,6 +379,7 @@ module.exports = {
   TIPOS_OCORRENCIA,
   MOTIVOS,
   CAUSAS,
+  TRIBUTOS,
   LIMITES,
   PERIODO_PADRAO,
 };

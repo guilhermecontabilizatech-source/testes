@@ -2,11 +2,12 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const auth = require('./auth');
 const { transacao } = require('./db');
 const { paraCsv } = require('./csv');
 const { registrarRotasOperacionais } = require('./operacional');
+const { prepararArquivo, prepararArquivos, gravarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
+const { lerXmlNota } = require('./xmlNota');
 const {
   ErroValidacao,
   apenasDigitos,
@@ -17,15 +18,7 @@ const {
   valorParaCentavos,
 } = require('./validacao');
 
-const LIMITE_CORPO = 15 * 1024 * 1024; // 15 MB (anexos chegam em base64)
-const LIMITE_ANEXO = 10 * 1024 * 1024;
-const TIPOS_ANEXO = {
-  'application/pdf': '.pdf',
-  'application/xml': '.xml',
-  'text/xml': '.xml',
-  'image/png': '.png',
-  'image/jpeg': '.jpg',
-};
+const LIMITE_CORPO = 30 * 1024 * 1024; // anexos chegam em base64 (até 10 MB cada)
 const PASTA_PUBLICA = path.join(__dirname, '..', 'public');
 const MIME_ESTATICO = {
   '.html': 'text/html; charset=utf-8',
@@ -51,6 +44,13 @@ const ROTULOS_STATUS = {
   cancelada: 'Cancelada',
 };
 
+const reaisTexto = (centavos) => (centavos / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+// Data de hoje (AAAA-MM-DD) no horário de Brasília.
+function hojeBrasilia() {
+  return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
   fs.mkdirSync(pastaArquivos, { recursive: true });
 
@@ -65,6 +65,37 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
   function registrarHistorico(solicitacaoId, usuarioId, acao, mensagem = null) {
     db.prepare('INSERT INTO historico (solicitacao_id, usuario_id, acao, mensagem) VALUES (?, ?, ?, ?)')
       .run(solicitacaoId, usuarioId, acao, mensagem);
+  }
+
+  function inserirAnexos(solicitacaoId, gravados, usuarioId) {
+    const ins = db.prepare(`
+      INSERT INTO anexos (solicitacao_id, nome_arquivo, arquivo, tipo_mime, tamanho, enviado_por)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    return gravados.map((g) => {
+      const r = ins.run(solicitacaoId, g.nome, g.arquivo, g.tipo_mime, g.tamanho, usuarioId);
+      registrarHistorico(solicitacaoId, usuarioId, 'anexo', `Arquivo anexado: ${g.nome}`);
+      return Number(r.lastInsertRowid);
+    });
+  }
+
+  function verificarNotaDuplicada(empresaId, numero, ignorarId) {
+    const existente = db.prepare(`
+      SELECT id FROM solicitacoes WHERE empresa_id = ? AND numero_nota = ? AND status <> 'cancelada' AND id IS NOT ?
+    `).get(empresaId, numero, ignorarId);
+    if (existente) throw new ErroValidacao(`A nota nº ${numero} já está registrada (solicitação #${existente.id}).`, 409);
+  }
+
+  // Solicitações em aberto da empresa; sugere a que bate com tomador (e valor) da nota.
+  function solicitacoesAbertas(empresaId, nota) {
+    const lista = db.prepare(`
+      SELECT id, tipo_nota, tomador_nome, tomador_documento, valor_centavos, status, criado_em
+      FROM solicitacoes WHERE empresa_id = ? AND status IN ('pendente', 'em_emissao') ORDER BY criado_em, id
+    `).all(empresaId).map((l) => ({ ...l }));
+    const doTomador = lista.filter((s) => nota.tomador_documento && s.tomador_documento === nota.tomador_documento);
+    const exatas = doTomador.filter((s) => s.valor_centavos === nota.valor_centavos);
+    const candidatas = exatas.length ? exatas : doTomador;
+    return { lista, sugerida_id: candidatas.length === 1 ? candidatas[0].id : null };
   }
 
   function buscarSolicitacao(id, usuario) {
@@ -102,6 +133,14 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
       condicoes.push("substr(s.data_competencia, 1, 7) = ?");
       params.push(mes);
     }
+    // Período pela data do pedido, no horário de Brasília (mesma regra do relatório).
+    for (const [param, operador] of [['inicio', '>='], ['fim', '<=']]) {
+      const valor = query.get(param);
+      if (valor && /^\d{4}-\d{2}-\d{2}$/.test(valor)) {
+        condicoes.push(`date(s.criado_em, '-3 hours') ${operador} ?`);
+        params.push(valor);
+      }
+    }
     const busca = query.get('busca');
     if (busca) {
       condicoes.push('(s.tomador_nome LIKE ? OR s.descricao LIKE ? OR s.numero_nota LIKE ? OR s.tomador_documento LIKE ?)');
@@ -117,7 +156,8 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
     return db.prepare(`
       SELECT s.id, s.empresa_id, e.razao_social AS empresa_nome, s.tipo_nota, s.tomador_nome,
              s.tomador_documento, s.valor_centavos, s.data_competencia, s.status, s.numero_nota,
-             s.criado_em, s.atualizado_em
+             s.data_emissao, s.criado_em, s.atualizado_em,
+             (SELECT COUNT(*) FROM anexos a WHERE a.solicitacao_id = s.id) AS anexos
       FROM solicitacoes s JOIN empresas e ON e.id = s.empresa_id
       ${where}
       ORDER BY CASE s.status WHEN 'pendente' THEN 0 WHEN 'em_emissao' THEN 1 ELSE 2 END, s.criado_em DESC, s.id DESC
@@ -382,6 +422,8 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
     const campos = { status: destino };
     if (destino === 'emitida') {
       campos.numero_nota = texto('Número da nota', corpo.numero_nota, { obrigatorio: true, max: 50 });
+      verificarNotaDuplicada(s.empresa_id, campos.numero_nota, s.id);
+      campos.data_emissao = hojeBrasilia();
     }
     if (destino === 'rejeitada') {
       campos.motivo_rejeicao = texto('Motivo da rejeição', corpo.mensagem, { obrigatorio: true, max: 2000 });
@@ -412,41 +454,124 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
   rota('POST', '/api/solicitacoes/:id/anexos', ({ usuario, params, corpo }) => {
     const s = buscarSolicitacao(params.id, usuario);
     if (s.status === 'cancelada') throw new ErroValidacao('Solicitação cancelada não aceita anexos.', 409);
-    const extensao = TIPOS_ANEXO[corpo.tipo_mime];
-    if (!extensao) throw new ErroValidacao('Tipo de arquivo não permitido. Envie PDF, XML, PNG ou JPG.');
-    const nome = texto('Nome do arquivo', corpo.nome_arquivo, { obrigatorio: true, max: 200 })
-      .replace(/[\\/\0]/g, '_');
-    const conteudo = Buffer.from(String(corpo.conteudo_base64 ?? ''), 'base64');
-    if (!conteudo.length) throw new ErroValidacao('Arquivo vazio.');
-    if (conteudo.length > LIMITE_ANEXO) throw new ErroValidacao('Arquivo maior que 10 MB.');
-
-    const arquivo = `${crypto.randomUUID()}${extensao}`;
-    fs.writeFileSync(path.join(pastaArquivos, arquivo), conteudo);
-    const id = transacao(db, () => {
-      const r = db.prepare(`
-        INSERT INTO anexos (solicitacao_id, nome_arquivo, arquivo, tipo_mime, tamanho, enviado_por)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).run(s.id, nome, arquivo, corpo.tipo_mime, conteudo.length, usuario.id);
-      registrarHistorico(s.id, usuario.id, 'anexo', `Arquivo anexado: ${nome}`);
-      return Number(r.lastInsertRowid);
-    });
-    return { id };
+    const { gravados, desfazer } = gravarArquivos(pastaArquivos, [prepararArquivo(corpo)]);
+    try {
+      const [id] = transacao(db, () => inserirAnexos(s.id, gravados, usuario.id));
+      return { id };
+    } catch (err) {
+      desfazer();
+      throw err;
+    }
   });
 
   rota('GET', '/api/anexos/:id', ({ usuario, params, responderBruto }) => {
     const a = db.prepare('SELECT * FROM anexos WHERE id = ?').get(params.id);
     if (!a) throw new ErroValidacao('Anexo não encontrado.', 404);
     buscarSolicitacao(a.solicitacao_id, usuario); // garante que o usuário pode ver a solicitação
-    const conteudo = fs.readFileSync(path.join(pastaArquivos, path.basename(a.arquivo)));
-    responderBruto(200, conteudo, {
-      'Content-Type': a.tipo_mime,
-      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(a.nome_arquivo)}`,
-    });
+    responderBruto(200, lerArquivo(pastaArquivos, a.arquivo), cabecalhosDownload(a));
   });
+
+  // ---------- registro de nota já emitida (perfil do cliente) ----------
+
+  rota('POST', '/api/notas/ler-xml', ({ corpo }) => {
+    const xml = Buffer.from(String(corpo.conteudo_base64 ?? ''), 'base64').toString('utf8');
+    const dados = lerXmlNota(xml);
+    if (!dados) throw new ErroValidacao('Não reconheci este XML como NF-e ou NFS-e. Preencha os dados manualmente.', 422);
+
+    const avisos = [];
+    const pelaNota = dados.emitente_documento
+      ? db.prepare('SELECT id, razao_social FROM empresas WHERE cnpj = ?').get(dados.emitente_documento)
+      : null;
+    let empresaId = corpo.empresa_id ? Number(corpo.empresa_id) : null;
+    if (empresaId && pelaNota && pelaNota.id !== empresaId) {
+      avisos.push(`Este XML foi emitido por ${pelaNota.razao_social}, não por esta empresa. Confira antes de salvar.`);
+    } else if (empresaId && dados.emitente_documento && !pelaNota) {
+      avisos.push(`O emitente do XML (CNPJ ${dados.emitente_documento}) não é desta empresa. Confira antes de salvar.`);
+    } else if (!empresaId && pelaNota) {
+      empresaId = pelaNota.id;
+    } else if (!empresaId) {
+      avisos.push('Nenhuma empresa cadastrada com o CNPJ do emitente deste XML. Selecione a empresa.');
+    }
+    if (empresaId && dados.numero) {
+      const existente = db.prepare("SELECT id FROM solicitacoes WHERE empresa_id = ? AND numero_nota = ? AND status <> 'cancelada'")
+        .get(empresaId, dados.numero);
+      if (existente) avisos.push(`A nota nº ${dados.numero} já está registrada (solicitação #${existente.id}).`);
+    }
+    const abertas = empresaId ? solicitacoesAbertas(empresaId, dados) : { lista: [], sugerida_id: null };
+    return { dados, empresa_id: empresaId, avisos, abertas: abertas.lista, sugerida_id: abertas.sugerida_id };
+  }, { papel: 'escritorio' });
+
+  rota('GET', '/api/empresas/:id/solicitacoes-abertas', ({ params }) => solicitacoesAbertas(params.id, {}).lista,
+    { papel: 'escritorio' });
+
+  rota('POST', '/api/notas-emitidas', ({ corpo, usuario }) => {
+    const empresa = db.prepare('SELECT id, ativo FROM empresas WHERE id = ?').get(Number(corpo.empresa_id));
+    if (!empresa) throw new ErroValidacao('Selecione a empresa.');
+    const numero = texto('Número da nota', corpo.numero_nota, { obrigatorio: true, max: 50 });
+    const dataEmissao = String(corpo.data_emissao ?? '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataEmissao) || Number.isNaN(Date.parse(dataEmissao))) {
+      throw new ErroValidacao('Data de emissão inválida.');
+    }
+    const preparados = prepararArquivos(corpo.arquivos);
+    if (!preparados.length) throw new ErroValidacao('Anexe o PDF e/ou o XML da nota.');
+
+    let vinculada = null;
+    let dados = null;
+    if (corpo.solicitacao_id) {
+      vinculada = db.prepare('SELECT * FROM solicitacoes WHERE id = ? AND empresa_id = ?').get(Number(corpo.solicitacao_id), empresa.id);
+      if (!vinculada) throw new ErroValidacao('Solicitação não encontrada para esta empresa.', 404);
+      if (!['pendente', 'em_emissao'].includes(vinculada.status)) {
+        throw new ErroValidacao(`A solicitação #${vinculada.id} não está aberta.`, 409);
+      }
+      verificarNotaDuplicada(empresa.id, numero, vinculada.id);
+    } else {
+      dados = validarSolicitacao({ ...corpo, data_competencia: corpo.data_competencia || dataEmissao });
+      verificarNotaDuplicada(empresa.id, numero, null);
+    }
+
+    const { gravados, desfazer } = gravarArquivos(pastaArquivos, preparados);
+    try {
+      const id = transacao(db, () => {
+        let solicitacaoId;
+        if (vinculada) {
+          solicitacaoId = vinculada.id;
+          db.prepare(`
+            UPDATE solicitacoes SET status = 'emitida', numero_nota = ?, data_emissao = ?,
+              responsavel_id = COALESCE(responsavel_id, ?), atualizado_em = datetime('now')
+            WHERE id = ?
+          `).run(numero, dataEmissao, usuario.id, solicitacaoId);
+          const valorNota = valorParaCentavos(corpo.valor);
+          const diferenca = Number.isInteger(valorNota) && valorNota !== vinculada.valor_centavos
+            ? ` Atenção: valor da nota (${reaisTexto(valorNota)}) diferente do solicitado (${reaisTexto(vinculada.valor_centavos)}).`
+            : '';
+          registrarHistorico(solicitacaoId, usuario.id, 'status:emitida', `Nota nº ${numero} emitida.${diferenca}`);
+        } else {
+          // A data do pedido passa a ser a da emissão (12h em Brasília) para contar no mês certo.
+          const r = db.prepare(`
+            INSERT INTO solicitacoes (empresa_id, criado_por, tipo_nota, tomador_documento, tomador_nome, tomador_email,
+              tomador_endereco, descricao, valor_centavos, data_competencia, observacoes, status, numero_nota,
+              data_emissao, responsavel_id, criado_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'emitida', ?, ?, ?, ?)
+          `).run(empresa.id, usuario.id, dados.tipo_nota, dados.tomador_documento, dados.tomador_nome, dados.tomador_email,
+            dados.tomador_endereco, dados.descricao, dados.valor_centavos, dados.data_competencia, dados.observacoes,
+            numero, dataEmissao, usuario.id, `${dataEmissao} 15:00:00`);
+          solicitacaoId = Number(r.lastInsertRowid);
+          registrarHistorico(solicitacaoId, usuario.id, 'criada', 'Nota registrada pelo escritório no perfil do cliente.');
+          registrarHistorico(solicitacaoId, usuario.id, 'status:emitida', `Nota nº ${numero} emitida.`);
+        }
+        inserirAnexos(solicitacaoId, gravados, usuario.id);
+        return solicitacaoId;
+      });
+      return { id, vinculada: Boolean(vinculada) };
+    } catch (err) {
+      desfazer();
+      throw err;
+    }
+  }, { papel: 'escritorio' });
 
   // ---------- controle operacional (ocorrências e relatório) ----------
 
-  registrarRotasOperacionais({ rota, db });
+  registrarRotasOperacionais({ rota, db, pastaArquivos });
 
   // ---------- servidor HTTP ----------
 

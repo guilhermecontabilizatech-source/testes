@@ -95,6 +95,25 @@ upsell e melhoria do serviço.
 
    O botão **Exportar CSV** gera a planilha completa para abrir no Excel.
 
+## Lançamento automático pelo perfil do cliente
+
+Em *Empresas* → **Abrir perfil**, cada cliente tem um painel do período (notas por mês,
+guias, multas e alertas) e três botões:
+
+- **Registrar nota emitida**: anexe o XML e/ou o PDF. Com o XML, o sistema lê sozinho
+  número, data, valor, tomador e descrição (NF-e, NFS-e Padrão Nacional e NFS-e ABRASF),
+  confere se o emitente é mesmo aquele cliente e, se houver uma solicitação em aberto
+  do mesmo tomador e valor, já a marca como emitida. Sem solicitação, a nota entra como
+  nova. Notas repetidas (mesmo número) são recusadas. O painel e o relatório contam a
+  nota no mês da emissão.
+- **Registrar guia recalculada**: anexe a nova guia e informe tributo, competência,
+  motivo, causa e o acréscimo pago.
+- **Registrar multa**: anexe a guia/notificação da multa e informe tributo, motivo,
+  causa e valor.
+
+No **Painel** há também o botão *Registrar nota emitida (XML)*, que identifica o cliente
+pelo CNPJ do emitente sem precisar abrir o perfil.
+
 ## Funcionalidades
 
 - Login com perfis **Escritório** e **Cliente**; cada cliente só vê as solicitações da
@@ -117,6 +136,8 @@ src/
   validacao.js  CPF/CNPJ, valores e validação das solicitações
   operacional.js ocorrências (guias recalculadas e multas) e relatório por cliente
   csv.js        geração de planilhas CSV
+  xmlNota.js    leitura de XML de NF-e e NFS-e
+  arquivos.js   validação e gravação de anexos
 public/         interface web (HTML/CSS/JS, sem build)
 test/           testes automatizados (node --test)
 ```
