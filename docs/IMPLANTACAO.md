@@ -11,6 +11,26 @@ a equipe acessar de qualquer lugar. Leva cerca de 30 minutos.
 | **Domínio** | Um subdomínio do site do escritório, por exemplo `notas.seuescritorio.com.br`. Sem domínio, dá para usar um endereço gratuito do tipo `203-0-113-10.sslip.io` (o instalador sugere o seu). |
 | **Acesso ao GitHub** | Para o servidor baixar o código, que está no repositório privado `guilhermecontabilizatech-source/testes`. |
 
+## Na Hostinger (VPS KVM 1 + painel.contabilizatech.com.br)
+
+1. **Contrate a VPS KVM 1**: localização **Brasil (São Paulo)** e sistema operacional
+   **Ubuntu 24.04** puro, sem painel de controle. Defina a senha de root e anote o **IP da VPS**.
+2. **Guarde o que houver no site atual**: em *Sites → painel.contabilizatech.com.br → Arquivos*,
+   baixe uma cópia caso exista algo útil.
+3. **Aponte o subdomínio para a VPS**: em *Domínios → contabilizatech.com.br → DNS / Nameservers*:
+   - edite o registro **A** de nome `painel` para o **IP da VPS**;
+   - **apague** o registro **AAAA** de `painel`, se existir. Se ele continuar apontando para a
+     hospedagem antiga, o certificado HTTPS falha;
+   - não mexa nos registros **MX**, **TXT** e no `@`/`www` do site principal, para não afetar
+     e-mails nem o site.
+4. **Remova o site "painel" da hospedagem compartilhada.** Só esse site: não cancele o plano
+   se o site principal estiver nele.
+5. Aguarde o DNS propagar. Na Hostinger costuma ser rápido; confira em <https://dnschecker.org>.
+6. No painel da VPS, abra o **terminal pelo navegador** (ou use `ssh root@IP_DA_VPS`) e siga
+   a partir do passo 3 deste guia. Quando o instalador pedir o domínio, use
+   `painel.contabilizatech.com.br`.
+7. Se você ativou o **firewall da VPS** no painel da Hostinger, libere as portas 22, 80 e 443.
+
 ## 2. Apontar o domínio para o servidor
 
 No painel onde o domínio do escritório é administrado (Registro.br, Hostinger, Cloudflare…),
