@@ -7,14 +7,15 @@ a equipe acessar de qualquer lugar. Leva cerca de 30 minutos.
 
 | Item | Detalhes |
 |------|----------|
-| **Servidor (VPS)** | Ubuntu 24.04, 1 vCPU, 1 a 2 GB de memória, 25 GB de disco. Qualquer provedor serve (Hostinger, DigitalOcean, AWS Lightsail, Contabo, Magalu Cloud, etc.). Prefira a região **São Paulo**. Os planos de entrada bastam. |
+| **Servidor (VPS)** | Ubuntu 24.04, 1 vCPU, 1 a 2 GB de memória, 25 GB de disco. Qualquer provedor serve (Hostinger, DigitalOcean, AWS Lightsail, Contabo, Magalu Cloud, etc.). Prefira a região mais próxima do Brasil: São Paulo, se houver, ou a costa leste dos EUA. Os planos de entrada bastam. |
 | **Domínio** | Um subdomínio do site do escritório, por exemplo `notas.seuescritorio.com.br`. Sem domínio, dá para usar um endereço gratuito do tipo `203-0-113-10.sslip.io` (o instalador sugere o seu). |
 | **Acesso ao GitHub** | Para o servidor baixar o código, que está no repositório privado `guilhermecontabilizatech-source/testes`. |
 
 ## Na Hostinger (VPS KVM 1 + painel.contabilizatech.com.br)
 
-1. **Contrate a VPS KVM 1**: localização **Brasil (São Paulo)** e sistema operacional
-   **Ubuntu 24.04** puro, sem painel de controle. Defina a senha de root e anote o **IP da VPS**.
+1. **Contrate a VPS KVM 1**: localização mais próxima do Brasil disponível (em geral
+   **Estados Unidos**) e sistema operacional **Ubuntu 24.04** puro, sem painel de controle.
+   O servidor fora do Brasil não muda os horários: o sistema calcula tudo no horário de Brasília. Defina a senha de root e anote o **IP da VPS**.
 2. **Guarde o que houver no site atual**: em *Sites → painel.contabilizatech.com.br → Arquivos*,
    baixe uma cópia caso exista algo útil.
 3. **Aponte o subdomínio para a VPS**: em *Domínios → contabilizatech.com.br → DNS / Nameservers*:
