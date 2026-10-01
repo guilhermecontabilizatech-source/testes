@@ -5,6 +5,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const auth = require('./auth');
 const { transacao } = require('./db');
+const { paraCsv } = require('./csv');
+const { registrarRotasOperacionais } = require('./operacional');
 const {
   ErroValidacao,
   apenasDigitos,
@@ -12,6 +14,7 @@ const {
   emailValido,
   texto,
   validarSolicitacao,
+  valorParaCentavos,
 } = require('./validacao');
 
 const LIMITE_CORPO = 15 * 1024 * 1024; // 15 MB (anexos chegam em base64)
@@ -172,14 +175,31 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
     if (!cnpjValido(cnpj)) throw new ErroValidacao('CNPJ inválido.');
     const email = texto('E-mail', corpo.email, { max: 200 });
     if (email && !emailValido(email)) throw new ErroValidacao('E-mail inválido.');
+    const planoNotas = corpo.plano_notas === true || corpo.plano_notas === 1 || corpo.plano_notas === '1' ? 1 : 0;
+    let notasIncluidas = null;
+    if (planoNotas && corpo.notas_incluidas !== undefined && corpo.notas_incluidas !== null && String(corpo.notas_incluidas).trim() !== '') {
+      notasIncluidas = Number(corpo.notas_incluidas);
+      if (!Number.isInteger(notasIncluidas) || notasIncluidas < 0) throw new ErroValidacao('Quantidade de notas incluídas inválida.');
+    }
+    let honorario = null;
+    if (corpo.honorario !== undefined && corpo.honorario !== null && String(corpo.honorario).trim() !== '') {
+      honorario = valorParaCentavos(corpo.honorario);
+      if (!Number.isInteger(honorario) || honorario < 0) throw new ErroValidacao('Honorário mensal inválido.');
+    }
     return {
       razao_social: texto('Razão social', corpo.razao_social, { obrigatorio: true, max: 200 }),
       cnpj,
       email,
       telefone: texto('Telefone', corpo.telefone, { max: 30 }),
       ativo: corpo.ativo === false || corpo.ativo === 0 ? 0 : 1,
+      plano_notas: planoNotas,
+      plano_nome: texto('Nome do plano', corpo.plano_nome, { max: 100 }),
+      notas_incluidas: notasIncluidas,
+      honorario_centavos: honorario,
     };
   }
+
+  const CAMPOS_EMPRESA = ['razao_social', 'cnpj', 'email', 'telefone', 'ativo', 'plano_notas', 'plano_nome', 'notas_incluidas', 'honorario_centavos'];
 
   function erroUnico(err, mensagem) {
     if (String(err.message).includes('UNIQUE')) throw new ErroValidacao(mensagem, 409);
@@ -189,8 +209,8 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
   rota('POST', '/api/empresas', ({ corpo }) => {
     const e = validarEmpresa(corpo);
     try {
-      const r = db.prepare('INSERT INTO empresas (razao_social, cnpj, email, telefone, ativo) VALUES (?, ?, ?, ?, ?)')
-        .run(e.razao_social, e.cnpj, e.email, e.telefone, e.ativo);
+      const r = db.prepare(`INSERT INTO empresas (${CAMPOS_EMPRESA.join(', ')}) VALUES (${CAMPOS_EMPRESA.map(() => '?').join(', ')})`)
+        .run(...CAMPOS_EMPRESA.map((c) => e[c]));
       return { id: Number(r.lastInsertRowid) };
     } catch (err) {
       return erroUnico(err, 'Já existe uma empresa com este CNPJ.');
@@ -200,8 +220,8 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
   rota('PUT', '/api/empresas/:id', ({ params, corpo }) => {
     const e = validarEmpresa(corpo);
     try {
-      const r = db.prepare('UPDATE empresas SET razao_social = ?, cnpj = ?, email = ?, telefone = ?, ativo = ? WHERE id = ?')
-        .run(e.razao_social, e.cnpj, e.email, e.telefone, e.ativo, params.id);
+      const r = db.prepare(`UPDATE empresas SET ${CAMPOS_EMPRESA.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+        .run(...CAMPOS_EMPRESA.map((c) => e[c]), params.id);
       if (!r.changes) throw new ErroValidacao('Empresa não encontrada.', 404);
       return { ok: true };
     } catch (err) {
@@ -276,17 +296,12 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
   rota('GET', '/api/solicitacoes.csv', ({ usuario, query, responderBruto }) => {
     const linhas = listarSolicitacoes(usuario, query);
     const cabecalho = ['ID', 'Empresa', 'Tipo', 'Tomador', 'CPF/CNPJ tomador', 'Valor', 'Competência', 'Status', 'Nº nota', 'Criada em'];
-    const esc = (v) => {
-      let t = String(v ?? '');
-      if (/^[=+\-@\t\r]/.test(t)) t = `'${t}`; // evita injeção de fórmulas em planilhas
-      return /[";\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-    };
-    const csv = [cabecalho, ...linhas.map((s) => [
+    const csv = paraCsv([cabecalho, ...linhas.map((s) => [
       s.id, s.empresa_nome, s.tipo_nota, s.tomador_nome, s.tomador_documento,
       (s.valor_centavos / 100).toFixed(2).replace('.', ','), s.data_competencia,
       ROTULOS_STATUS[s.status], s.numero_nota, s.criado_em,
-    ])].map((l) => l.map(esc).join(';')).join('\r\n');
-    responderBruto(200, '﻿' + csv, {
+    ])]);
+    responderBruto(200, csv, {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': 'attachment; filename="solicitacoes.csv"',
     });
@@ -428,6 +443,10 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
       'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(a.nome_arquivo)}`,
     });
   });
+
+  // ---------- controle operacional (ocorrências e relatório) ----------
+
+  registrarRotasOperacionais({ rota, db });
 
   // ---------- servidor HTTP ----------
 

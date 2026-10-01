@@ -69,6 +69,32 @@ npm test
 
 Toda mudança, edição, anexo e mensagem fica registrada no histórico da solicitação.
 
+## Controle operacional (out–dez/2026) e reajustes de janeiro
+
+Área exclusiva do escritório para juntar os dados que embasam reajustes de plano,
+upsell e melhoria do serviço.
+
+1. **Plano de cada cliente** (menu *Empresas* → *Editar*): se tem plano de emissão de
+   notas, nome do plano, quantas notas estão incluídas por mês e o honorário mensal atual.
+2. **Ocorrências** (menu *Ocorrências*): registre cada **guia recalculada** e cada **multa**
+   recebida, com motivo, data, valor e a **causa** (cliente, escritório ou outro).
+   - Motivos de multa: falta de declaração, declaração em atraso, guia enviada após o
+     vencimento, pagamento em atraso pelo cliente, outro.
+   - Motivos de recálculo: cliente pagou após o vencimento, guia enviada após o vencimento,
+     informações enviadas em atraso, retificação, outro.
+3. **Notas solicitadas**: contadas automaticamente a partir das solicitações (pela data do
+   pedido, sem as canceladas). Pedidos que chegam por WhatsApp/e-mail devem ser lançados
+   pela equipe em *Nova solicitação*, escolhendo a empresa, para entrarem na contagem.
+4. **Relatório** (menu *Relatório*, período padrão 01/10/2026 a 31/12/2026): por cliente,
+   notas mês a mês (destacando meses acima da franquia), média mensal, guias, multas e
+   alertas:
+   - *Oportunidade de plano*: cliente sem plano com média de 2+ notas/mês, ou com plano que
+     passou da franquia em algum mês;
+   - *Atenção com o cliente*: recálculos ou multas causados pelo cliente;
+   - *Qualidade interna*: recálculos ou multas causados pelo escritório.
+
+   O botão **Exportar CSV** gera a planilha completa para abrir no Excel.
+
 ## Funcionalidades
 
 - Login com perfis **Escritório** e **Cliente**; cada cliente só vê as solicitações da
@@ -89,6 +115,8 @@ src/
   db.js         esquema do banco SQLite
   auth.js       senhas (scrypt), sessões e cookies
   validacao.js  CPF/CNPJ, valores e validação das solicitações
+  operacional.js ocorrências (guias recalculadas e multas) e relatório por cliente
+  csv.js        geração de planilhas CSV
 public/         interface web (HTML/CSS/JS, sem build)
 test/           testes automatizados (node --test)
 ```

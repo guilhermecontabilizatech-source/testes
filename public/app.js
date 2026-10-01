@@ -403,7 +403,7 @@ async function telaEmpresas() {
     const dialogo = h('dialog', {},
       h('form', {
         onsubmit: aoEnviar(async (dados) => {
-          const corpo = { ...dados, ativo: dados.ativo === '1' };
+          const corpo = { ...dados, ativo: dados.ativo === '1', plano_notas: dados.plano_notas === '1' };
           if (e.id) await api(`/api/empresas/${e.id}`, { metodo: 'PUT', dados: corpo });
           else await api('/api/empresas', { metodo: 'POST', dados: corpo });
           dialogo.close();
@@ -417,7 +417,14 @@ async function telaEmpresas() {
         campo('CNPJ *', { name: 'cnpj', required: true, valor: documento(e.cnpj) }),
         campo('Telefone', { name: 'telefone', valor: e.telefone }),
         campo('E-mail', { type: 'email', name: 'email', valor: e.email }, { inteira: true }),
-        campo('Situação', { tag: 'select', name: 'ativo', valor: e.ativo === 0 ? '0' : '1', opcoes: [['1', 'Ativa'], ['0', 'Inativa']] })),
+        campo('Situação', { tag: 'select', name: 'ativo', valor: e.ativo === 0 ? '0' : '1', opcoes: [['1', 'Ativa'], ['0', 'Inativa']] }),
+        campo('Honorário mensal (R$)', { name: 'honorario', inputmode: 'decimal', placeholder: '0,00',
+          valor: e.honorario_centavos == null ? '' : (e.honorario_centavos / 100).toFixed(2).replace('.', ',') })),
+      h('h3', {}, 'Plano de emissão de notas'),
+      h('div', { class: 'grade' },
+        campo('Tem plano de notas?', { tag: 'select', name: 'plano_notas', valor: e.plano_notas ? '1' : '0', opcoes: [['0', 'Não'], ['1', 'Sim']] }),
+        campo('Notas incluídas por mês', { type: 'number', name: 'notas_incluidas', min: 0, step: 1, valor: e.notas_incluidas ?? '', placeholder: 'Deixe vazio se não houver limite' }),
+        campo('Nome do plano', { name: 'plano_nome', maxlength: 100, valor: e.plano_nome, placeholder: 'Ex.: Simples Nacional — Essencial' }, { inteira: true })),
       h('div', { class: 'acoes' },
         h('button', { type: 'submit' }, 'Salvar'),
         h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
@@ -432,16 +439,206 @@ async function telaEmpresas() {
       h('button', { onclick: () => abrirFormulario() }, '+ Nova empresa')),
     empresas.length
       ? h('div', { class: 'tabela' }, h('table', {},
-        h('thead', {}, h('tr', {}, ['Razão social', 'CNPJ', 'Contato', 'Usuários', 'Em aberto', 'Situação', ''].map((t) => h('th', {}, t)))),
+        h('thead', {}, h('tr', {}, ['Razão social', 'CNPJ', 'Plano de notas', 'Contato', 'Usuários', 'Em aberto', 'Situação', ''].map((t) => h('th', {}, t)))),
         h('tbody', {}, empresas.map((e) => h('tr', {},
           h('td', {}, e.razao_social),
           h('td', {}, documento(e.cnpj)),
+          h('td', {}, descricaoPlano(e)),
           h('td', {}, e.email ?? '', h('div', { class: 'suave' }, e.telefone ?? '')),
           h('td', {}, e.usuarios),
           h('td', {}, h('a', { href: `#/?empresa_id=${e.id}` }, e.abertas)),
           h('td', {}, e.ativo ? 'Ativa' : 'Inativa'),
           h('td', {}, h('button', { class: 'secundario', onclick: () => abrirFormulario(e) }, 'Editar')))))))
       : h('div', { class: 'cartao vazio' }, 'Cadastre a primeira empresa cliente para começar.'));
+}
+
+function descricaoPlano(e) {
+  if (!e.plano_notas) return h('span', { class: 'suave' }, 'Sem plano');
+  const limite = e.notas_incluidas == null ? 'sem limite' : `${e.notas_incluidas} notas/mês`;
+  return [e.plano_nome || 'Com plano', h('div', { class: 'suave' }, limite)];
+}
+
+const hoje = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const PERIODO_PADRAO = { inicio: '2026-10-01', fim: '2026-12-31' };
+const nomeMes = (m) => new Date(`${m}-15T12:00:00`).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }).replace('. de ', '/').replace(' de ', '/');
+
+function filtrosNaUrl(rota, dados) {
+  const novo = new URLSearchParams();
+  for (const [k, v] of Object.entries(dados)) if (v) novo.set(k, v);
+  location.hash = `#/${rota}?${novo}`;
+}
+
+async function telaOcorrencias(query) {
+  const filtros = new URLSearchParams(query);
+  const [opcoes, empresas, lista] = await Promise.all([
+    api('/api/ocorrencias/opcoes'),
+    api('/api/empresas'),
+    api(`/api/ocorrencias?${filtros}`),
+  ]);
+  const opcoesEmpresa = empresas.filter((e) => e.ativo).map((e) => [e.id, e.razao_social]);
+  const motivosDe = (tipo) => Object.entries(opcoes.motivos[tipo]);
+
+  const selectMotivo = campo('Motivo *', { tag: 'select', name: 'motivo', required: true, opcoes: motivosDe('multa') });
+  const campoValor = campo('Valor da multa (R$)', { name: 'valor', inputmode: 'decimal', placeholder: '0,00' });
+  const trocarTipo = (tipo) => {
+    selectMotivo.querySelector('select').replaceChildren(...motivosDe(tipo).map(([v, t]) => h('option', { value: v }, t)));
+    campoValor.querySelector('input').placeholder = tipo === 'multa' ? '0,00' : 'Opcional (juros/multa da guia)';
+    campoValor.firstChild.textContent = tipo === 'multa' ? 'Valor da multa (R$)' : 'Valor do acréscimo (R$)';
+  };
+
+  const form = h('form', {
+    class: 'cartao',
+    onsubmit: aoEnviar(async (dados, f) => {
+      await api('/api/ocorrencias', { metodo: 'POST', dados });
+      avisar(`${opcoes.tipos[dados.tipo]} registrada.`);
+      f.querySelector('[name=valor]').value = '';
+      f.querySelector('[name=descricao]').value = '';
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Registrar ocorrência'),
+  h('p', { class: 'suave' }, 'Use para guias que precisaram ser recalculadas e multas recebidas. A causa ajuda a separar o que é atraso do cliente do que é falha interna.'),
+  h('div', { class: 'grade' },
+    campo('Empresa *', { tag: 'select', name: 'empresa_id', required: true, opcoes: [['', 'Selecione…'], ...opcoesEmpresa] }),
+    (() => {
+      const c = campo('Tipo *', { tag: 'select', name: 'tipo', required: true, valor: 'multa', opcoes: Object.entries(opcoes.tipos) });
+      c.querySelector('select').addEventListener('change', (ev) => trocarTipo(ev.target.value));
+      return c;
+    })(),
+    campo('Data *', { type: 'date', name: 'data', required: true, valor: hoje() }),
+    selectMotivo,
+    campo('Causa *', { tag: 'select', name: 'causa', required: true, opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.causas)] }),
+    campoValor,
+    campo('Descrição', { name: 'descricao', maxlength: 500, placeholder: 'Ex.: DAS competência 09/2026' }, { inteira: true })),
+  h('div', { class: 'acoes' }, h('button', { type: 'submit' }, 'Registrar')));
+
+  const barraFiltros = h('form', {
+    class: 'filtros',
+    onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('ocorrencias', dadosFormulario(ev.target)); },
+  },
+  campo('Empresa', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todas'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+  campo('Tipo', { tag: 'select', name: 'tipo', valor: filtros.get('tipo'), opcoes: [['', 'Todos'], ...Object.entries(opcoes.tipos)] }),
+  campo('Causa', { tag: 'select', name: 'causa', valor: filtros.get('causa'), opcoes: [['', 'Todas'], ...Object.entries(opcoes.causas)] }),
+  campo('De', { type: 'date', name: 'inicio', valor: filtros.get('inicio') }),
+  campo('Até', { type: 'date', name: 'fim', valor: filtros.get('fim') }),
+  h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
+  [...filtros].length ? h('a', { href: '#/ocorrencias', class: 'botao secundario' }, 'Limpar') : null);
+
+  const excluir = async (o) => {
+    if (!confirm(`Excluir ${opcoes.tipos[o.tipo].toLowerCase()} de ${o.empresa_nome} (${data(o.data)})?`)) return;
+    try {
+      await api(`/api/ocorrencias/${o.id}`, { metodo: 'DELETE', dados: {} });
+      avisar('Ocorrência excluída.');
+      rotear();
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+  };
+
+  const totalValor = lista.reduce((t, o) => t + (o.valor_centavos ?? 0), 0);
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' }, h('h1', {}, 'Ocorrências: guias recalculadas e multas')),
+    form,
+    barraFiltros,
+    lista.length
+      ? h('div', {},
+        h('p', { class: 'suave' }, `${lista.length} ocorrência(s) · total ${moeda(totalValor)}`),
+        h('div', { class: 'tabela' }, h('table', {},
+          h('thead', {}, h('tr', {}, ['Data', 'Empresa', 'Tipo', 'Motivo', 'Causa', 'Valor', 'Descrição', ''].map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+          h('tbody', {}, lista.map((o) => h('tr', {},
+            h('td', {}, data(o.data)),
+            h('td', {}, o.empresa_nome),
+            h('td', {}, h('span', { class: `etiqueta`, style: { '--cor': o.tipo === 'multa' ? 'var(--rejeitada)' : 'var(--pendente)' } }, opcoes.tipos[o.tipo])),
+            h('td', {}, opcoes.motivos[o.tipo][o.motivo] ?? o.motivo),
+            h('td', {}, opcoes.causas[o.causa]),
+            h('td', { class: 'num' }, o.valor_centavos == null ? '—' : moeda(o.valor_centavos)),
+            h('td', {}, o.descricao ?? '', h('div', { class: 'suave' }, o.registrado_por_nome ?? '')),
+            h('td', {}, h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir'))))))))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma ocorrência encontrada.'));
+}
+
+const CORES_SINAL = { upsell: 'var(--em_emissao)', cliente: 'var(--pendente)', qualidade: 'var(--rejeitada)' };
+const ROTULOS_SINAL = { upsell: 'Oportunidade de plano', cliente: 'Atenção com o cliente', qualidade: 'Qualidade interna' };
+
+async function telaRelatorio(query) {
+  const filtros = new URLSearchParams(query);
+  if (!filtros.get('inicio')) filtros.set('inicio', PERIODO_PADRAO.inicio);
+  if (!filtros.get('fim')) filtros.set('fim', PERIODO_PADRAO.fim);
+  const soAlertas = filtros.get('alertas') === '1';
+  const periodo = new URLSearchParams({ inicio: filtros.get('inicio'), fim: filtros.get('fim') });
+  const rel = await api(`/api/relatorio?${periodo}`);
+  const empresas = soAlertas ? rel.empresas.filter((e) => e.sinais.length) : rel.empresas;
+  const comAlerta = rel.empresas.filter((e) => e.sinais.length).length;
+  const oportunidades = rel.empresas.filter((e) => e.sinais.some((s) => s.tipo === 'upsell')).length;
+
+  const indicador = (numero, rotulo, cor) => h('div', { class: 'indicador', style: { '--cor': cor, cursor: 'default' } },
+    h('div', { class: 'numero' }, numero), h('div', { class: 'rotulo' }, rotulo));
+
+  const contagemCausa = (c) => `cliente ${c.cliente} · escritório ${c.escritorio} · outro ${c.outro}`;
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, 'Relatório operacional por cliente'),
+      h('a', { class: 'botao secundario', href: `/api/relatorio.csv?${periodo}` }, 'Exportar CSV (Excel)')),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        const d = dadosFormulario(ev.target);
+        filtrosNaUrl('relatorio', { inicio: d.inicio, fim: d.fim, alertas: ev.target.alertas.checked ? '1' : '' });
+      },
+    },
+    campo('De', { type: 'date', name: 'inicio', required: true, valor: filtros.get('inicio') }),
+    campo('Até', { type: 'date', name: 'fim', required: true, valor: filtros.get('fim') }),
+    h('label', { class: 'checkbox' }, h('input', { type: 'checkbox', name: 'alertas', checked: soAlertas }), 'Só clientes com alerta'),
+    h('button', { type: 'submit', class: 'secundario' }, 'Atualizar')),
+    h('div', { class: 'indicadores' },
+      indicador(rel.totais.notas, 'Notas solicitadas', 'var(--em_emissao)'),
+      indicador(rel.totais.guias, `Guias recalculadas · ${contagemCausa(rel.totais.por_causa.guia_recalculada)}`, 'var(--pendente)'),
+      indicador(rel.totais.multas, `Multas · ${moeda(rel.totais.multas_valor_centavos)} · ${contagemCausa(rel.totais.por_causa.multa)}`, 'var(--rejeitada)'),
+      indicador(oportunidades, 'Clientes com oportunidade de plano', 'var(--emitida)'),
+      indicador(comAlerta, 'Clientes com algum alerta', 'var(--cancelada)')),
+    rel.totais.por_motivo.length ? h('div', { class: 'cartao' },
+      h('h2', {}, 'Motivos mais frequentes'),
+      h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}, 'Tipo'), h('th', {}, 'Motivo'), h('th', { class: 'num' }, 'Quantidade'), h('th', { class: 'num' }, 'Valor'))),
+        h('tbody', {}, rel.totais.por_motivo.map((m) => h('tr', {},
+          h('td', {}, m.tipo === 'multa' ? 'Multa' : 'Guia recalculada'),
+          h('td', {}, m.rotulo),
+          h('td', { class: 'num' }, m.quantidade),
+          h('td', { class: 'num' }, m.valor_centavos ? moeda(m.valor_centavos) : '—')))))) : null,
+    h('div', { class: 'legenda' }, Object.entries(ROTULOS_SINAL).map(([tipo, rotulo]) =>
+      h('span', { class: 'etiqueta', style: { '--cor': CORES_SINAL[tipo] } }, rotulo))),
+    empresas.length
+      ? h('div', { class: 'tabela' }, h('table', { class: 'relatorio' },
+        h('thead', {}, h('tr', {},
+          h('th', {}, 'Cliente / plano'),
+          rel.meses.map((m) => h('th', { class: 'num' }, nomeMes(m))),
+          h('th', { class: 'num' }, 'Total'), h('th', { class: 'num' }, 'Média/mês'),
+          h('th', { class: 'num' }, 'Guias'), h('th', { class: 'num' }, 'Multas'),
+          h('th', {}, 'Alertas'))),
+        h('tbody', {}, empresas.map((e) => h('tr', {},
+          h('td', {}, h('strong', {}, e.razao_social), h('div', { class: 'suave' },
+            e.plano_notas ? `${e.plano_nome || 'Com plano'} · ${e.notas_incluidas == null ? 'sem limite' : `${e.notas_incluidas}/mês`}` : 'Sem plano de notas',
+            e.honorario_centavos != null ? ` · ${moeda(e.honorario_centavos)}` : '')),
+          rel.meses.map((m) => {
+            const n = e.notas.por_mes[m];
+            const acima = e.plano_notas && e.notas_incluidas != null && n > e.notas_incluidas;
+            return h('td', { class: `num${acima ? ' acima' : ''}`, title: acima ? 'Acima da franquia' : null }, n);
+          }),
+          h('td', { class: 'num' }, h('strong', {}, e.notas.total)),
+          h('td', { class: 'num' }, String(e.notas.media_mensal).replace('.', ',')),
+          h('td', { class: 'num' }, e.guias.total, e.guias.total ? h('div', { class: 'suave' }, `cli ${e.guias.cliente} · esc ${e.guias.escritorio}`) : null),
+          h('td', { class: 'num' }, e.multas.total, e.multas.total ? h('div', { class: 'suave' }, moeda(e.multas.valor_centavos)) : null),
+          h('td', {}, e.sinais.length
+            ? h('ul', { class: 'sinais' }, e.sinais.map((s) => h('li', { style: { '--cor': CORES_SINAL[s.tipo] } }, s.texto)))
+            : h('span', { class: 'suave' }, '—')))))))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum cliente para mostrar neste período.'),
+    h('p', { class: 'suave peq' },
+      `Notas solicitadas contam pela data do pedido (canceladas não entram). Alerta de plano: cliente sem plano com média de ${String(rel.limites.mediaNotasSemPlano).replace('.', ',')} ou mais notas/mês, ou com plano que passou da franquia em algum mês.`));
 }
 
 async function telaUsuarios() {
@@ -533,7 +730,9 @@ async function carregarUsuario() {
 
 function montarMenu(caminho) {
   const itens = [['#/', 'Solicitações'], ['#/nova', 'Nova solicitação']];
-  if (usuario.papel === 'escritorio') itens.push(['#/empresas', 'Empresas'], ['#/usuarios', 'Usuários']);
+  if (usuario.papel === 'escritorio') {
+    itens.push(['#/ocorrencias', 'Ocorrências'], ['#/relatorio', 'Relatório'], ['#/empresas', 'Empresas'], ['#/usuarios', 'Usuários']);
+  }
   document.getElementById('menu').replaceChildren(...itens.map(([href, texto]) => h('a', {
     href, class: (href === '#/' ? caminho === '/' || caminho.startsWith('/solicitacao') : `#${caminho}` === href) ? 'ativo' : null,
   }, texto)));
@@ -558,6 +757,8 @@ async function rotear() {
     if ((m = caminho.match(/^\/solicitacao\/(\d+)$/))) return await telaDetalhe(m[1]);
     if (caminho === '/empresas' && usuario.papel === 'escritorio') return await telaEmpresas();
     if (caminho === '/usuarios' && usuario.papel === 'escritorio') return await telaUsuarios();
+    if (caminho === '/ocorrencias' && usuario.papel === 'escritorio') return await telaOcorrencias(query);
+    if (caminho === '/relatorio' && usuario.papel === 'escritorio') return await telaRelatorio(query);
     if (caminho === '/senha') return telaSenha();
     renderizar(h('div', { class: 'cartao vazio' }, 'Página não encontrada. ', h('a', { href: '#/' }, 'Voltar ao início')));
   } catch (err) {

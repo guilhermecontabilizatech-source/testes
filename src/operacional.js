@@ -1,0 +1,305 @@
+'use strict';
+
+const { ErroValidacao, texto, valorParaCentavos } = require('./validacao');
+const { paraCsv, reais } = require('./csv');
+
+const TIPOS_OCORRENCIA = {
+  guia_recalculada: 'Guia recalculada',
+  multa: 'Multa',
+};
+
+const MOTIVOS = {
+  guia_recalculada: {
+    cliente_pagou_atrasado: 'Cliente pagou após o vencimento',
+    guia_enviada_atrasada: 'Guia enviada após o vencimento',
+    informacao_atrasada: 'Cliente enviou informações em atraso',
+    retificacao: 'Retificação / alteração de valores',
+    outro: 'Outro',
+  },
+  multa: {
+    falta_declaracao: 'Falta de declaração',
+    declaracao_atrasada: 'Declaração entregue em atraso',
+    guia_apos_vencimento: 'Guia enviada após o vencimento',
+    pagamento_atrasado: 'Pagamento em atraso pelo cliente',
+    outro: 'Outro',
+  },
+};
+
+const CAUSAS = {
+  cliente: 'Cliente',
+  escritorio: 'Escritório',
+  outro: 'Outro / terceiros',
+};
+
+// Limites usados para gerar os alertas do relatório.
+const LIMITES = {
+  mediaNotasSemPlano: 2, // notas/mês a partir das quais vale oferecer plano
+  guiasRecalculadas: 3, // recálculos no período que merecem atenção
+};
+
+const PERIODO_PADRAO = { inicio: '2026-10-01', fim: '2026-12-31' };
+
+const dataValida = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d));
+
+function validarOcorrencia(db, corpo) {
+  const tipo = corpo.tipo;
+  if (!TIPOS_OCORRENCIA[tipo]) throw new ErroValidacao('Tipo de ocorrência inválido.');
+  if (!MOTIVOS[tipo][corpo.motivo]) throw new ErroValidacao('Selecione o motivo.');
+  if (!CAUSAS[corpo.causa]) throw new ErroValidacao('Selecione a causa.');
+  const data = String(corpo.data ?? '');
+  if (!dataValida(data)) throw new ErroValidacao('Data inválida.');
+
+  const empresaId = Number(corpo.empresa_id);
+  if (!db.prepare('SELECT 1 FROM empresas WHERE id = ?').get(empresaId)) {
+    throw new ErroValidacao('Selecione a empresa.');
+  }
+
+  let valor = null;
+  if (corpo.valor !== undefined && corpo.valor !== null && String(corpo.valor).trim() !== '') {
+    valor = valorParaCentavos(corpo.valor);
+    if (!Number.isInteger(valor) || valor < 0) throw new ErroValidacao('Valor inválido.');
+  }
+
+  return {
+    empresa_id: empresaId,
+    tipo,
+    data,
+    motivo: corpo.motivo,
+    causa: corpo.causa,
+    valor_centavos: valor,
+    descricao: texto('Descrição', corpo.descricao, { max: 500 }),
+  };
+}
+
+function lerPeriodo(query) {
+  const inicio = query.get('inicio') || PERIODO_PADRAO.inicio;
+  const fim = query.get('fim') || PERIODO_PADRAO.fim;
+  if (!dataValida(inicio) || !dataValida(fim)) throw new ErroValidacao('Período inválido.');
+  if (fim < inicio) throw new ErroValidacao('A data final deve ser depois da inicial.');
+  const meses = [];
+  let [ano, mes] = inicio.slice(0, 7).split('-').map(Number);
+  const ultimo = fim.slice(0, 7);
+  for (;;) {
+    const atual = `${ano}-${String(mes).padStart(2, '0')}`;
+    meses.push(atual);
+    if (atual >= ultimo) break;
+    if (meses.length >= 36) throw new ErroValidacao('Escolha um período de até 36 meses.');
+    mes += 1;
+    if (mes > 12) { mes = 1; ano += 1; }
+  }
+  return { inicio, fim, meses };
+}
+
+// Consolida, por empresa, notas solicitadas, guias recalculadas e multas no período.
+function calcularRelatorio(db, { inicio, fim, meses }) {
+  const empresas = db.prepare(`
+    SELECT id, razao_social, cnpj, ativo, plano_notas, plano_nome, notas_incluidas, honorario_centavos
+    FROM empresas ORDER BY razao_social
+  `).all();
+
+  // Datas de criação ficam em UTC; o deslocamento de -3h mantém o mês no horário de Brasília.
+  const notas = db.prepare(`
+    SELECT empresa_id, strftime('%Y-%m', criado_em, '-3 hours') AS mes,
+           COUNT(*) AS solicitadas, SUM(status = 'emitida') AS emitidas
+    FROM solicitacoes
+    WHERE status <> 'cancelada' AND date(criado_em, '-3 hours') BETWEEN ? AND ?
+    GROUP BY empresa_id, mes
+  `).all(inicio, fim);
+
+  const ocorrencias = db.prepare(`
+    SELECT empresa_id, tipo, causa, motivo, COUNT(*) AS quantidade, SUM(valor_centavos) AS valor
+    FROM ocorrencias WHERE data BETWEEN ? AND ?
+    GROUP BY empresa_id, tipo, causa, motivo
+  `).all(inicio, fim);
+
+  const porEmpresa = new Map(empresas.map((e) => [e.id, {
+    id: e.id,
+    razao_social: e.razao_social,
+    cnpj: e.cnpj,
+    ativo: e.ativo,
+    plano_notas: e.plano_notas,
+    plano_nome: e.plano_nome,
+    notas_incluidas: e.notas_incluidas,
+    honorario_centavos: e.honorario_centavos,
+    notas: { por_mes: Object.fromEntries(meses.map((m) => [m, 0])), total: 0, emitidas: 0, media_mensal: 0 },
+    meses_acima_franquia: 0,
+    guias: { total: 0, cliente: 0, escritorio: 0, outro: 0 },
+    multas: { total: 0, valor_centavos: 0, cliente: 0, escritorio: 0, outro: 0, valor_escritorio_centavos: 0 },
+    sinais: [],
+  }]));
+
+  const totais = {
+    notas: 0,
+    guias: 0,
+    multas: 0,
+    multas_valor_centavos: 0,
+    por_motivo: [],
+    por_causa: { guia_recalculada: { cliente: 0, escritorio: 0, outro: 0 }, multa: { cliente: 0, escritorio: 0, outro: 0 } },
+  };
+
+  for (const n of notas) {
+    const e = porEmpresa.get(n.empresa_id);
+    if (!e || !(n.mes in e.notas.por_mes)) continue;
+    e.notas.por_mes[n.mes] += n.solicitadas;
+    e.notas.total += n.solicitadas;
+    e.notas.emitidas += n.emitidas ?? 0;
+    totais.notas += n.solicitadas;
+  }
+
+  const motivos = new Map();
+  for (const o of ocorrencias) {
+    const e = porEmpresa.get(o.empresa_id);
+    if (!e) continue;
+    if (o.tipo === 'guia_recalculada') {
+      e.guias.total += o.quantidade;
+      e.guias[o.causa] += o.quantidade;
+      totais.guias += o.quantidade;
+    } else {
+      e.multas.total += o.quantidade;
+      e.multas[o.causa] += o.quantidade;
+      e.multas.valor_centavos += o.valor ?? 0;
+      if (o.causa === 'escritorio') e.multas.valor_escritorio_centavos += o.valor ?? 0;
+      totais.multas += o.quantidade;
+      totais.multas_valor_centavos += o.valor ?? 0;
+    }
+    totais.por_causa[o.tipo][o.causa] += o.quantidade;
+    const chave = `${o.tipo}:${o.motivo}`;
+    const m = motivos.get(chave) ?? { tipo: o.tipo, motivo: o.motivo, rotulo: MOTIVOS[o.tipo][o.motivo] ?? o.motivo, quantidade: 0, valor_centavos: 0 };
+    m.quantidade += o.quantidade;
+    m.valor_centavos += o.valor ?? 0;
+    motivos.set(chave, m);
+  }
+  totais.por_motivo = [...motivos.values()].sort((a, b) => b.quantidade - a.quantidade);
+
+  const resultado = [];
+  for (const e of porEmpresa.values()) {
+    const temDados = e.notas.total || e.guias.total || e.multas.total;
+    if (!e.ativo && !temDados) continue;
+
+    e.notas.media_mensal = Math.round((e.notas.total / meses.length) * 10) / 10;
+    if (e.plano_notas && e.notas_incluidas != null) {
+      e.meses_acima_franquia = meses.filter((m) => e.notas.por_mes[m] > e.notas_incluidas).length;
+    }
+    e.sinais = gerarSinais(e, meses.length);
+    resultado.push(e);
+  }
+
+  resultado.sort((a, b) => b.sinais.length - a.sinais.length || b.notas.total - a.notas.total
+    || a.razao_social.localeCompare(b.razao_social, 'pt-BR'));
+
+  return { inicio, fim, meses, limites: LIMITES, totais, empresas: resultado };
+}
+
+function gerarSinais(e, qtdMeses) {
+  const sinais = [];
+  const reaisTexto = (c) => `R$ ${reais(c)}`;
+  if (!e.plano_notas && e.notas.media_mensal >= LIMITES.mediaNotasSemPlano) {
+    sinais.push({ tipo: 'upsell', texto: `Sem plano de notas e pediu em média ${String(e.notas.media_mensal).replace('.', ',')} notas/mês: oferecer plano` });
+  }
+  if (e.meses_acima_franquia > 0) {
+    sinais.push({ tipo: 'upsell', texto: `Passou da franquia de ${e.notas_incluidas} notas em ${e.meses_acima_franquia} de ${qtdMeses} meses: revisar plano` });
+  }
+  if (e.guias.cliente >= 2) {
+    sinais.push({ tipo: 'cliente', texto: `${e.guias.cliente} guias recalculadas por atraso do cliente: orientar ou cobrar recálculo` });
+  } else if (e.guias.total >= LIMITES.guiasRecalculadas) {
+    sinais.push({ tipo: 'cliente', texto: `${e.guias.total} guias recalculadas no período` });
+  }
+  if (e.multas.cliente > 0) {
+    sinais.push({ tipo: 'cliente', texto: `${e.multas.cliente} multa(s) por causa do cliente: reforçar prazos com o cliente` });
+  }
+  if (e.guias.escritorio > 0 || e.multas.escritorio > 0) {
+    const partes = [];
+    if (e.guias.escritorio) partes.push(`${e.guias.escritorio} recálculo(s)`);
+    if (e.multas.escritorio) partes.push(`${e.multas.escritorio} multa(s) (${reaisTexto(e.multas.valor_escritorio_centavos)})`);
+    sinais.push({ tipo: 'qualidade', texto: `Falhas do escritório: ${partes.join(' e ')}: revisar processo` });
+  }
+  return sinais;
+}
+
+function relatorioCsv(rel) {
+  const cab = [
+    'Empresa', 'CNPJ', 'Plano de notas', 'Plano', 'Notas incluídas/mês', 'Honorário mensal',
+    ...rel.meses.map((m) => `Notas ${m.slice(5)}/${m.slice(0, 4)}`),
+    'Total notas', 'Média/mês', 'Meses acima da franquia',
+    'Guias recalculadas', 'Guias (cliente)', 'Guias (escritório)',
+    'Multas', 'Valor multas', 'Multas (cliente)', 'Multas (escritório)', 'Alertas',
+  ];
+  const linhas = rel.empresas.map((e) => [
+    e.razao_social, e.cnpj, e.plano_notas ? 'Sim' : 'Não', e.plano_nome, e.notas_incluidas,
+    e.honorario_centavos == null ? '' : reais(e.honorario_centavos),
+    ...rel.meses.map((m) => e.notas.por_mes[m]),
+    e.notas.total, String(e.notas.media_mensal).replace('.', ','), e.meses_acima_franquia,
+    e.guias.total, e.guias.cliente, e.guias.escritorio,
+    e.multas.total, reais(e.multas.valor_centavos), e.multas.cliente, e.multas.escritorio,
+    e.sinais.map((s) => s.texto).join(' | '),
+  ]);
+  return paraCsv([cab, ...linhas]);
+}
+
+function registrarRotasOperacionais({ rota, db }) {
+  const soEscritorio = { papel: 'escritorio' };
+
+  rota('GET', '/api/ocorrencias/opcoes', () => ({ tipos: TIPOS_OCORRENCIA, motivos: MOTIVOS, causas: CAUSAS }), soEscritorio);
+
+  rota('GET', '/api/ocorrencias', ({ query }) => {
+    const condicoes = [];
+    const params = [];
+    if (query.get('empresa_id')) { condicoes.push('o.empresa_id = ?'); params.push(Number(query.get('empresa_id'))); }
+    if (query.get('tipo')) { condicoes.push('o.tipo = ?'); params.push(query.get('tipo')); }
+    if (query.get('causa')) { condicoes.push('o.causa = ?'); params.push(query.get('causa')); }
+    if (dataValida(query.get('inicio') ?? '')) { condicoes.push('o.data >= ?'); params.push(query.get('inicio')); }
+    if (dataValida(query.get('fim') ?? '')) { condicoes.push('o.data <= ?'); params.push(query.get('fim')); }
+    const where = condicoes.length ? `WHERE ${condicoes.join(' AND ')}` : '';
+    return db.prepare(`
+      SELECT o.*, e.razao_social AS empresa_nome, u.nome AS registrado_por_nome
+      FROM ocorrencias o JOIN empresas e ON e.id = o.empresa_id
+      LEFT JOIN usuarios u ON u.id = o.registrado_por
+      ${where} ORDER BY o.data DESC, o.id DESC LIMIT 1000
+    `).all(...params).map((l) => ({ ...l }));
+  }, soEscritorio);
+
+  rota('POST', '/api/ocorrencias', ({ corpo, usuario }) => {
+    const o = validarOcorrencia(db, corpo);
+    const r = db.prepare(`
+      INSERT INTO ocorrencias (empresa_id, tipo, data, motivo, causa, valor_centavos, descricao, registrado_por)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(o.empresa_id, o.tipo, o.data, o.motivo, o.causa, o.valor_centavos, o.descricao, usuario.id);
+    return { id: Number(r.lastInsertRowid) };
+  }, soEscritorio);
+
+  rota('PUT', '/api/ocorrencias/:id', ({ corpo, params }) => {
+    const o = validarOcorrencia(db, corpo);
+    const r = db.prepare(`
+      UPDATE ocorrencias SET empresa_id = ?, tipo = ?, data = ?, motivo = ?, causa = ?, valor_centavos = ?, descricao = ?
+      WHERE id = ?
+    `).run(o.empresa_id, o.tipo, o.data, o.motivo, o.causa, o.valor_centavos, o.descricao, params.id);
+    if (!r.changes) throw new ErroValidacao('Ocorrência não encontrada.', 404);
+    return { ok: true };
+  }, soEscritorio);
+
+  rota('DELETE', '/api/ocorrencias/:id', ({ params }) => {
+    const r = db.prepare('DELETE FROM ocorrencias WHERE id = ?').run(params.id);
+    if (!r.changes) throw new ErroValidacao('Ocorrência não encontrada.', 404);
+    return { ok: true };
+  }, soEscritorio);
+
+  rota('GET', '/api/relatorio', ({ query }) => calcularRelatorio(db, lerPeriodo(query)), soEscritorio);
+
+  rota('GET', '/api/relatorio.csv', ({ query, responderBruto }) => {
+    const periodo = lerPeriodo(query);
+    responderBruto(200, relatorioCsv(calcularRelatorio(db, periodo)), {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="relatorio-${periodo.inicio}-a-${periodo.fim}.csv"`,
+    });
+  }, soEscritorio);
+}
+
+module.exports = {
+  registrarRotasOperacionais,
+  calcularRelatorio,
+  TIPOS_OCORRENCIA,
+  MOTIVOS,
+  CAUSAS,
+  LIMITES,
+  PERIODO_PADRAO,
+};

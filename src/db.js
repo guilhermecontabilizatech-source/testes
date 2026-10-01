@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS historico (
 );
 CREATE INDEX IF NOT EXISTS idx_historico_solicitacao ON historico(solicitacao_id);
 
+CREATE TABLE IF NOT EXISTS ocorrencias (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  tipo TEXT NOT NULL CHECK (tipo IN ('guia_recalculada', 'multa')),
+  data TEXT NOT NULL,
+  motivo TEXT NOT NULL,
+  causa TEXT NOT NULL CHECK (causa IN ('cliente', 'escritorio', 'outro')),
+  valor_centavos INTEGER CHECK (valor_centavos IS NULL OR valor_centavos >= 0),
+  descricao TEXT,
+  registrado_por INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ocorrencias_empresa_data ON ocorrencias(empresa_id, data);
+
 CREATE TABLE IF NOT EXISTS anexos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   solicitacao_id INTEGER NOT NULL REFERENCES solicitacoes(id) ON DELETE CASCADE,
@@ -79,6 +93,25 @@ CREATE TABLE IF NOT EXISTS anexos (
 );
 `;
 
+// Colunas acrescentadas depois da primeira versão; criadas em bancos antigos na abertura.
+const COLUNAS_NOVAS = {
+  empresas: {
+    plano_notas: 'INTEGER NOT NULL DEFAULT 0',
+    plano_nome: 'TEXT',
+    notas_incluidas: 'INTEGER',
+    honorario_centavos: 'INTEGER',
+  },
+};
+
+function migrar(db) {
+  for (const [tabela, colunas] of Object.entries(COLUNAS_NOVAS)) {
+    const existentes = new Set(db.prepare(`PRAGMA table_info(${tabela})`).all().map((c) => c.name));
+    for (const [coluna, definicao] of Object.entries(colunas)) {
+      if (!existentes.has(coluna)) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`);
+    }
+  }
+}
+
 function abrirBanco(caminho) {
   if (caminho !== ':memory:') {
     fs.mkdirSync(path.dirname(caminho), { recursive: true });
@@ -87,6 +120,7 @@ function abrirBanco(caminho) {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  migrar(db);
   return db;
 }
 
