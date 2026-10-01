@@ -1,0 +1,8 @@
+.git
+data
+deploy
+docs
+test
+node_modules
+*.db
+.env

@@ -33,6 +33,10 @@ ADMIN_EMAIL=voce@seuescritorio.com.br ADMIN_SENHA='uma-senha-forte' npm start
 | `ADMIN_EMAIL`   | `admin@escritorio.com.br`  | E-mail do primeiro administrador                   |
 | `ADMIN_SENHA`   | (gerada aleatoriamente)    | Senha do primeiro administrador                    |
 | `COOKIE_SEGURO` | —                          | Use `1` em produção com HTTPS                      |
+| `CONFIAR_PROXY` | —                          | Use `1` atrás de proxy (Caddy) para obter o IP real |
+| `BACKUP_DIR`    | `DATA_DIR/backups`         | Pasta dos backups diários                          |
+| `BACKUP_HORA`   | `3`                        | Hora do backup diário (Brasília)                   |
+| `BACKUP_DIAS`   | `30`                       | Dias de cópias guardadas (`0` desliga o backup)    |
 
 ### Testes
 
@@ -150,8 +154,13 @@ test/           testes automatizados (node --test)
   sem `innerHTML`, evitando XSS.
 - Arquivos anexados são salvos com nome aleatório, fora da pasta pública.
 
-Em produção, rode atrás de um proxy com HTTPS (nginx, Caddy etc.), defina
-`COOKIE_SEGURO=1` e faça backup periódico da pasta `DATA_DIR`.
+- Login bloqueado por 15 minutos após 5 senhas erradas (por conta e IP).
+
+## Colocar no ar
+
+Veja o passo a passo em [`docs/IMPLANTACAO.md`](docs/IMPLANTACAO.md): servidor com Docker,
+HTTPS automático (Caddy), backups diários e atualização com um comando
+(`deploy/instalar.sh` e `deploy/atualizar.sh`).
 
 ## Próximos passos sugeridos
 

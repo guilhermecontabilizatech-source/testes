@@ -1,0 +1,9 @@
+# O Caddy obtém e renova sozinho o certificado HTTPS para o domínio.
+{$DOMINIO} {
+	encode gzip
+	request_body {
+		max_size 32MB
+	}
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy app:3000
+}

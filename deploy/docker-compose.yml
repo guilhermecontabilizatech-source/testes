@@ -1,0 +1,36 @@
+# Sistema + Caddy (HTTPS automático). Configuração em deploy/.env (criado pelo instalar.sh).
+services:
+  app:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      COOKIE_SEGURO: "1"
+      CONFIAR_PROXY: "1"
+      TZ: America/Sao_Paulo
+    volumes:
+      - ./dados:/dados
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [app]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMINIO: ${DOMINIO}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -8,6 +8,7 @@ const { paraCsv } = require('./csv');
 const { registrarRotasOperacionais } = require('./operacional');
 const { prepararArquivo, prepararArquivos, gravarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 const { lerXmlNota } = require('./xmlNota');
+const { criarLimitador } = require('./limitador');
 const {
   ErroValidacao,
   apenasDigitos,
@@ -51,7 +52,7 @@ function hojeBrasilia() {
   return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
+function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = false, limitador = criarLimitador() }) {
   fs.mkdirSync(pastaArquivos, { recursive: true });
 
   const rotas = [];
@@ -167,13 +168,24 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
 
   // ---------- autenticação ----------
 
-  rota('POST', '/api/login', ({ corpo, responder }) => {
+  rota('GET', '/api/saude', () => {
+    db.prepare('SELECT 1').get();
+    return { ok: true };
+  }, { publica: true });
+
+  rota('POST', '/api/login', ({ corpo, responder, ip }) => {
     const email = String(corpo.email ?? '').trim();
     const senha = String(corpo.senha ?? '');
+    const minutos = limitador.bloqueio(ip, email);
+    if (minutos) {
+      throw new ErroValidacao(`Muitas tentativas de login. Tente novamente em ${minutos} minuto(s).`, 429);
+    }
     const usuario = db.prepare('SELECT * FROM usuarios WHERE email = ? AND ativo = 1').get(email);
     if (!usuario || !auth.conferirSenha(senha, usuario.senha_hash)) {
+      limitador.falhou(ip, email);
       throw new ErroValidacao('E-mail ou senha incorretos.', 401);
     }
+    limitador.acertou(ip, email);
     const token = auth.criarSessao(db, usuario.id);
     responder(200, { ok: true }, { 'Set-Cookie': auth.cookieSessao(token, { seguro: cookieSeguro }) });
   }, { publica: true });
@@ -658,9 +670,14 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false }) {
       }
       const corpo = req.method === 'GET' ? {} : await lerCorpo(req);
 
+      // Atrás de um proxy (Caddy), o IP real é o último do X-Forwarded-For (o que o proxy
+      // acrescentou); os anteriores vêm do visitante e podem ser forjados.
+      const ip = (confiarProxy && String(req.headers['x-forwarded-for'] ?? '').split(',').pop().trim())
+        || req.socket.remoteAddress;
+
       let enviado = false;
       const ctx = {
-        usuario, token, params, corpo, query: url.searchParams,
+        usuario, token, params, corpo, ip, query: url.searchParams,
         responder: (...a) => { enviado = true; responder(...a); },
         responderBruto: (...a) => { enviado = true; responderBruto(...a); },
       };
