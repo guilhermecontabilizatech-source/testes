@@ -28,7 +28,8 @@ const ROTULOS_HISTORICO = {
 };
 
 let usuario = null;
-let opcoes = { canais: {}, acesso_clientes: false, portal_clientes: false, clientes_entram: false };
+let opcoes = {
+  canais: {}, regimes: {}, ufs: [], tributos: {}, situacoes_multa: {}, tipos_pesquisa: {}, dimensoes_csat: {}, tipos_honorario: {}, formas_pagamento: {}, situacoes_honorario: {}, situacoes_vencimento: {}, tipos_demanda: {}, prioridades: {}, status_demanda: {}, acesso_clientes: false, portal_clientes: false, clientes_entram: false };
 const conteudo = document.getElementById('conteudo');
 
 // Cria elementos DOM de forma segura (texto nunca é interpretado como HTML).
@@ -125,6 +126,27 @@ function campo(rotulo, atributos, { inteira = false } = {}) {
   return h('label', { class: inteira ? 'inteira' : null }, rotulo, el);
 }
 
+// No celular as tabelas viram cartões: cada célula recebe o título da sua coluna (data-rotulo),
+// mostrado pelo CSS. Vale também para tabelas montadas depois (diálogos, prévias).
+function rotularTabelas(raiz) {
+  for (const tabela of raiz.querySelectorAll('table:not(.manter)')) {
+    const titulos = [];
+    for (const th of tabela.tHead?.rows[tabela.tHead.rows.length - 1]?.cells ?? []) {
+      for (let i = 0; i < th.colSpan; i++) titulos.push(th.textContent.trim());
+    }
+    for (const corpo of tabela.tBodies) {
+      for (const linha of corpo.rows) {
+        let coluna = 0;
+        for (const celula of linha.cells) {
+          if (!celula.hasAttribute('data-rotulo')) celula.setAttribute('data-rotulo', titulos[coluna] ?? '');
+          coluna += celula.colSpan;
+        }
+      }
+    }
+  }
+}
+new MutationObserver(() => rotularTabelas(document)).observe(document.body, { childList: true, subtree: true });
+
 function renderizar(...elementos) {
   conteudo.replaceChildren(...elementos.filter((el) => el != null && el !== false));
   window.scrollTo(0, 0);
@@ -138,6 +160,7 @@ function telaLogin() {
   document.getElementById('topo').hidden = true;
   document.getElementById('faixa-marca').hidden = true;
   document.body.classList.add('tela-login');
+  document.body.classList.remove('com-lateral');
   renderizar(h('div', { class: 'pagina-login' }, h('div', { class: 'cartao login' },
     h('img', { class: 'logo-login', src: '/marca/logo.webp', alt: 'ContabilizaTech — a sua contabilidade digital.' }),
     h('div', { class: 'faixa-marca' }),
@@ -423,41 +446,58 @@ function abrirDialogo(...conteudoDialogo) {
   return dialogo;
 }
 
+const rotuloRegime = (e) => (e.regime ? rotuloComOutro(opcoes.regimes, e.regime, e.regime_outro) : null);
+
 async function abrirFormularioEmpresa(e = {}) {
   const equipe = await equipeDoEscritorio();
+  const regime = campo('Regime tributário', {
+    tag: 'select', name: 'regime', valor: e.regime ?? '', opcoes: [['', '— não informado —'], ...Object.entries(opcoes.regimes)],
+  });
   const dialogo = abrirDialogo(h('form', {
     onsubmit: aoEnviar(async (dados) => {
       const corpo = { ...dados, ativo: dados.ativo === '1', plano_notas: dados.plano_notas === '1' };
       if (e.id) await api(`/api/empresas/${e.id}`, { metodo: 'PUT', dados: corpo });
       else await api('/api/empresas', { metodo: 'POST', dados: corpo });
       dialogo.close();
-      avisar('Empresa salva.');
+      avisar('Cliente salvo.');
       rotear();
     }),
   },
-  h('h2', {}, e.id ? 'Editar empresa' : 'Nova empresa cliente'),
+  h('h2', {}, e.id ? 'Editar cliente' : 'Novo cliente'),
   h('div', { class: 'grade' },
-    campo('Razão social *', { name: 'razao_social', required: true, valor: e.razao_social }, { inteira: true }),
-    campo('CNPJ *', { name: 'cnpj', required: true, valor: documento(e.cnpj) }),
-    campo('Telefone', { name: 'telefone', valor: e.telefone }),
-    campo('E-mail', { type: 'email', name: 'email', valor: e.email }, { inteira: true }),
+    campo('Razão social ou nome *', { name: 'razao_social', required: true, valor: e.razao_social }, { inteira: true }),
+    campo('Nome fantasia', { name: 'nome_fantasia', maxlength: 200, valor: e.nome_fantasia }),
+    campo('CNPJ ou CPF *', { name: 'cnpj', required: true, valor: documento(e.cnpj), placeholder: 'CPF para autônomo / pessoa física' }),
+    comOutro(regime, 'regime_outro', { valor: e.regime_outro ?? '', rotulo: 'Qual regime' }),
+    campo('Situação', { tag: 'select', name: 'ativo', valor: e.ativo === 0 ? '0' : '1', opcoes: [['1', 'Ativo'], ['0', 'Inativo']] }),
     campo('Responsável no escritório', { tag: 'select', name: 'responsavel_id', valor: e.responsavel_id ?? '', opcoes: [['', '—'], ...equipe.map((u) => [u.id, u.nome])] }),
-    campo('Situação', { tag: 'select', name: 'ativo', valor: e.ativo === 0 ? '0' : '1', opcoes: [['1', 'Ativa'], ['0', 'Inativa']] }),
-    campo('Honorário mensal (R$)', { name: 'honorario', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(e.honorario_centavos) })),
+    campo('Honorário mensal (R$)', { name: 'honorario', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(e.honorario_centavos) }),
+    campo('Dia de vencimento do honorário', { type: 'number', name: 'dia_vencimento', min: 1, max: 31, step: 1, valor: e.dia_vencimento ?? '', placeholder: 'Ex.: 10' }),
+    campo('Início do contrato', { type: 'date', name: 'data_contrato', valor: e.data_contrato })),
+  h('h3', {}, 'Contato e endereço'),
+  h('div', { class: 'grade' },
+    campo('E-mail', { type: 'email', name: 'email', valor: e.email }),
+    campo('Telefone', { name: 'telefone', valor: e.telefone }),
+    campo('Endereço', { name: 'endereco', maxlength: 300, valor: e.endereco }, { inteira: true }),
+    campo('Cidade', { name: 'cidade', maxlength: 100, valor: e.cidade }),
+    campo('UF', { tag: 'select', name: 'uf', valor: e.uf ?? '', opcoes: [['', '—'], ...opcoes.ufs.map((uf) => [uf, uf])] })),
   h('h3', {}, 'Plano de emissão de notas'),
   h('div', { class: 'grade' },
     campo('Tem plano de notas?', { tag: 'select', name: 'plano_notas', valor: e.plano_notas ? '1' : '0', opcoes: [['0', 'Não'], ['1', 'Sim']] }),
     campo('Notas incluídas por mês', { type: 'number', name: 'notas_incluidas', min: 0, step: 1, valor: e.notas_incluidas ?? '', placeholder: 'Deixe vazio se não houver limite' }),
     campo('Nome do plano', { name: 'plano_nome', maxlength: 100, valor: e.plano_nome, placeholder: 'Ex.: Simples Nacional — Essencial' }, { inteira: true })),
+  h('div', { class: 'grade', style: { marginTop: '14px' } },
+    campo('Observações', { tag: 'textarea', name: 'observacoes', maxlength: 2000, valor: e.observacoes }, { inteira: true })),
   h('div', { class: 'acoes' },
     h('button', { type: 'submit' }, 'Salvar'),
     h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+  dialogo.classList.add('largo');
 }
 
 // Exclusão de empresa: mostra o que será apagado junto e, se houver registros, exige digitar EXCLUIR.
 async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
   const dep = await api(`/api/empresas/${e.id}/dependencias`);
-  const temDados = dep.notas || dep.ocorrencias || dep.usuarios;
+  const temDados = dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos || dep.honorarios || dep.pesquisas;
   const dialogo = abrirDialogo(h('form', {
     onsubmit: aoEnviar(async (dados) => {
       await api(`/api/empresas/${e.id}`, { metodo: 'DELETE', dados: { confirmacao: dados.confirmacao ?? '' } });
@@ -474,9 +514,13 @@ async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
       h('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } },
         dep.notas ? h('li', {}, `${dep.notas} nota(s) fiscal(is)`) : null,
         dep.ocorrencias ? h('li', {}, `${dep.ocorrencias} guia(s) recalculada(s)/multa(s)`) : null,
+        dep.demandas ? h('li', {}, `${dep.demandas} demanda(s)`) : null,
+        dep.vencimentos ? h('li', {}, `${dep.vencimentos} vencimento(s)`) : null,
+        dep.honorarios ? h('li', {}, `${dep.honorarios} cobrança(s) de honorário`) : null,
+        dep.pesquisas ? h('li', {}, `${dep.pesquisas} pesquisa(s) de satisfação`) : null,
         dep.arquivos ? h('li', {}, `${dep.arquivos} arquivo(s) anexado(s)`) : null,
         dep.usuarios ? h('li', {}, `${dep.usuarios} acesso(s) de cliente`) : null))
-    : h('p', { class: 'suave' }, 'Esta empresa não tem notas nem ocorrências registradas.'),
+    : h('p', { class: 'suave' }, 'Esta empresa não tem notas, ocorrências, demandas nem vencimentos registrados.'),
   temDados ? h('p', { class: 'suave' },
     'Se a empresa só deixou de ser cliente, prefira ', h('strong', {}, 'Editar → Situação: Inativa'),
     ': ela some das listas de lançamento, mas o histórico continua no relatório.') : null,
@@ -490,7 +534,14 @@ async function telaEmpresas() {
   const empresas = await api('/api/empresas');
   const podeLote = Boolean(usuario.admin);
   const selecionadas = new Set();
-  const busca = h('input', { type: 'search', placeholder: 'Buscar por nome, CNPJ ou responsável…', style: { minWidth: '280px' } });
+  const busca = h('input', { type: 'search', placeholder: 'Buscar por nome, CNPJ/CPF ou responsável…', style: { minWidth: '280px' } });
+  const filtroRegime = h('select', { title: 'Regime tributário' },
+    h('option', { value: '' }, 'Todos os regimes'),
+    Object.entries(opcoes.regimes).map(([v, t]) => h('option', { value: v }, t)),
+    h('option', { value: '-' }, 'Regime não informado'));
+  const filtroSituacao = h('select', { title: 'Situação' },
+    h('option', { value: '' }, 'Ativos e inativos'), h('option', { value: '1' }, 'Só ativos'), h('option', { value: '0' }, 'Só inativos'));
+  const contagem = h('span', { class: 'suave' });
   const marcarTodas = h('input', { type: 'checkbox', title: 'Selecionar todas as visíveis' });
   const contador = h('span', { class: 'suave' });
   const botaoLote = h('button', { class: 'perigo', onclick: () => abrirExclusaoLote(empresas.filter((e) => selecionadas.has(e.id))) });
@@ -504,18 +555,18 @@ async function telaEmpresas() {
     }) : null;
     const tr = h('tr', {},
       podeLote && h('td', {}, marcar),
-      h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social)),
-      h('td', {}, documento(e.cnpj)),
+      h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social), e.nome_fantasia ? h('div', { class: 'suave' }, e.nome_fantasia) : null,
+        e.ativo ? null : h('div', {}, h('span', { class: 'etiqueta', style: { '--cor': 'var(--cancelada)' } }, 'Inativo'))),
+      h('td', { style: { whiteSpace: 'nowrap' } }, documento(e.cnpj)),
+      h('td', {}, rotuloRegime(e) ?? h('span', { class: 'suave' }, '—')),
       h('td', {}, descricaoPlano(e)),
       h('td', { class: 'num' }, e.honorario_centavos == null ? '—' : moeda(e.honorario_centavos)),
       h('td', {}, e.responsavel_nome ?? h('span', { class: 'suave' }, '—')),
       h('td', {}, e.email ?? '', h('div', { class: 'suave' }, e.telefone ?? '')),
-      h('td', {}, e.ativo ? 'Ativa' : 'Inativa'),
       h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0, flexWrap: 'nowrap' } },
-        h('a', { class: 'botao', href: `#/empresa/${e.id}` }, 'Abrir perfil'),
         h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar'),
         h('button', { class: 'secundario', title: 'Excluir empresa', onclick: () => abrirExclusaoEmpresa(e) }, 'Excluir'))));
-    const textoBusca = normalizarBusca(`${e.razao_social} ${e.cnpj} ${documento(e.cnpj)} ${e.responsavel_nome ?? ''}`);
+    const textoBusca = normalizarBusca(`${e.razao_social} ${e.nome_fantasia ?? ''} ${e.cnpj} ${documento(e.cnpj)} ${e.responsavel_nome ?? ''}`);
     return { e, tr, marcar, textoBusca };
   });
 
@@ -532,22 +583,32 @@ async function telaEmpresas() {
     for (const l of visiveis()) if (marcarTodas.checked) selecionadas.add(l.e.id); else selecionadas.delete(l.e.id);
     atualizarSelecao();
   });
-  busca.addEventListener('input', () => {
+  function filtrar() {
     const termo = normalizarBusca(busca.value);
-    for (const l of linhas) l.tr.hidden = Boolean(termo) && !l.textoBusca.includes(termo);
+    for (const l of linhas) {
+      const regimeOk = !filtroRegime.value || (filtroRegime.value === '-' ? !l.e.regime : l.e.regime === filtroRegime.value);
+      const situacaoOk = !filtroSituacao.value || String(l.e.ativo) === filtroSituacao.value;
+      l.tr.hidden = !regimeOk || !situacaoOk || (Boolean(termo) && !l.textoBusca.includes(termo));
+    }
+    const n = visiveis().length;
+    contagem.textContent = n === empresas.length ? `${n} cliente(s)` : `${n} de ${empresas.length} cliente(s)`;
     atualizarSelecao();
-  });
+  }
+  busca.addEventListener('input', filtrar);
+  filtroRegime.addEventListener('change', filtrar);
+  filtroSituacao.addEventListener('change', filtrar);
+  filtrar();
 
-  const cabecalho = ['Razão social', 'CNPJ', 'Plano de notas', 'Honorário', 'Responsável', 'Contato', 'Situação', ''];
+  const cabecalho = ['Cliente', 'CNPJ/CPF', 'Regime', 'Plano de notas', 'Honorário', 'Responsável', 'Contato', ''];
   renderizar(
     h('div', { class: 'cabecalho-pagina' },
-      h('h1', {}, 'Empresas clientes'),
+      h('h1', {}, 'Clientes'),
       h('div', { class: 'acoes', style: { marginTop: 0 } },
         h('button', { class: 'secundario', onclick: abrirImportacao }, 'Importar planilha ou PDF'),
-        h('button', { onclick: () => abrirFormularioEmpresa() }, '+ Nova empresa'))),
+        h('button', { onclick: () => abrirFormularioEmpresa() }, '+ Novo cliente'))),
     empresas.length
       ? h('div', {},
-        h('div', { class: 'filtros' }, busca, h('span', { class: 'suave' }, `${empresas.length} empresa(s)`),
+        h('div', { class: 'filtros' }, busca, filtroRegime, filtroSituacao, contagem,
           podeLote && h('span', { class: 'suave' }, 'Marque as caixas para excluir várias de uma vez.')),
         barraLote,
         h('div', { class: 'tabela' }, h('table', {},
@@ -555,7 +616,7 @@ async function telaEmpresas() {
             podeLote && h('th', {}, marcarTodas),
             cabecalho.map((t) => h('th', { class: t === 'Honorário' ? 'num' : null }, t)))),
           h('tbody', {}, linhas.map((l) => l.tr)))))
-      : h('div', { class: 'cartao vazio' }, 'Cadastre a primeira empresa cliente ou importe uma planilha para começar.'));
+      : h('div', { class: 'cartao vazio' }, 'Cadastre o primeiro cliente ou importe uma planilha para começar.'));
 }
 
 const normalizarBusca = (t) => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
@@ -589,6 +650,10 @@ async function abrirExclusaoLote(empresas) {
       h('li', {}, `${previa.empresas} empresa(s)`),
       h('li', {}, `${previa.notas} nota(s) fiscal(is)`),
       h('li', {}, `${previa.ocorrencias} guia(s) recalculada(s)/multa(s)`),
+      previa.demandas ? h('li', {}, `${previa.demandas} demanda(s)`) : null,
+      previa.vencimentos ? h('li', {}, `${previa.vencimentos} vencimento(s)`) : null,
+      previa.honorarios ? h('li', {}, `${previa.honorarios} cobrança(s) de honorário`) : null,
+      previa.pesquisas ? h('li', {}, `${previa.pesquisas} pesquisa(s) de satisfação`) : null,
       h('li', {}, `${previa.arquivos} arquivo(s) anexado(s)`),
       previa.usuarios ? h('li', {}, `${previa.usuarios} acesso(s) de cliente`) : null)),
   h('p', { class: 'suave' }, 'O backup da madrugada guarda os dados até ontem; o que foi lançado hoje não tem cópia.'),
@@ -753,6 +818,8 @@ function formularioOcorrencia({ opcoes: op, empresas, empresaFixa = null, tipoFi
   const campoMotivo = campo('Motivo *', { tag: 'select', name: 'motivo', required: true, opcoes: motivosDe(tipoInicial) });
   const rotuloValor = (tipo) => (tipo === 'multa' ? 'Valor da multa (R$)' : 'Acréscimo pago — juros/multa (R$)');
   const campoValor = campo(rotuloValor(tipoInicial), { name: 'valor', inputmode: 'decimal', placeholder: '0,00' });
+  const campoVencimento = campo('Vencimento da multa', { type: 'date', name: 'vencimento' });
+  campoVencimento.hidden = tipoInicial !== 'multa';
   const rotuloArquivo = (tipo) => (tipo === 'multa' ? 'Guia / notificação da multa (PDF ou imagem)' : 'Guia recalculada (PDF ou imagem)');
   const inputArquivo = h('input', { type: 'file', name: 'arquivos', multiple: true, accept: '.pdf,.png,.jpg,.jpeg,.xml' });
   const campoArquivo = h('label', { class: 'inteira' }, rotuloArquivo(tipoInicial), inputArquivo);
@@ -761,6 +828,8 @@ function formularioOcorrencia({ opcoes: op, empresas, empresaFixa = null, tipoFi
     select.replaceChildren(...motivosDe(tipo).map(([v, t]) => h('option', { value: v }, t)));
     select.dispatchEvent(new Event('change'));
     campoValor.firstChild.textContent = rotuloValor(tipo);
+    campoVencimento.hidden = tipo !== 'multa';
+    if (tipo !== 'multa') campoVencimento.querySelector('input').value = '';
     campoArquivo.firstChild.textContent = rotuloArquivo(tipo);
   };
 
@@ -799,6 +868,7 @@ function formularioOcorrencia({ opcoes: op, empresas, empresaFixa = null, tipoFi
     comOutro(campo('Causa *', { tag: 'select', name: 'causa', required: true, opcoes: [['', 'Selecione…'], ...Object.entries(op.causas)] }),
       'causa_outro', { rotulo: 'Descreva a causa' }),
     campoValor,
+    campoVencimento,
     campo('Observação', { name: 'descricao', maxlength: 500, placeholder: 'Ex.: cliente avisou do pagamento só no dia 25' }, { inteira: true })),
   h('div', { class: 'acoes' }, h('button', { type: 'submit' }, tipoFixo ? ROTULO_ACAO_OCORRENCIA[tipoFixo] : 'Registrar')));
 }
@@ -963,7 +1033,8 @@ function tabelaOcorrencias(lista, op, { mostrarEmpresa = true, aoExcluir }) {
       avisar(err.message, 'erro');
     }
   };
-  const cabecalho = ['Data', mostrarEmpresa && 'Empresa', 'Tipo', 'Tributo / comp.', 'Motivo', 'Causa', 'Valor', 'Guia anexada', ''].filter((t) => t !== false);
+  const cabecalho = ['Data', mostrarEmpresa && 'Empresa', 'Tipo', 'Tributo / comp.', 'Motivo', 'Causa', 'Valor', 'Situação', 'Guia anexada', '']
+    .filter((t) => t !== false);
   return h('div', { class: 'tabela' }, h('table', {},
     h('thead', {}, h('tr', {}, cabecalho.map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
     h('tbody', {}, lista.map((o) => h('tr', {},
@@ -975,10 +1046,13 @@ function tabelaOcorrencias(lista, op, { mostrarEmpresa = true, aoExcluir }) {
       h('td', {}, rotuloComOutro(op.motivos[o.tipo], o.motivo, o.motivo_outro), o.descricao ? h('div', { class: 'suave' }, o.descricao) : null),
       h('td', {}, rotuloComOutro(op.causas, o.causa, o.causa_outro)),
       h('td', { class: 'num' }, o.valor_centavos == null ? '—' : moeda(o.valor_centavos)),
+      h('td', {}, situacaoMulta(o)),
       h('td', {}, o.anexos.length
         ? o.anexos.map((a) => h('div', {}, h('a', { href: `/api/ocorrencias/anexos/${a.id}` }, a.nome_arquivo)))
         : h('span', { class: 'suave' }, 'sem anexo')),
-      h('td', { class: 'nao-imprimir' }, h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir')))))));
+      h('td', { class: 'nao-imprimir' }, h('div', { class: 'acoes', style: { marginTop: 0 } },
+        o.tipo === 'multa' ? h('button', { class: 'secundario', onclick: () => abrirSituacaoMulta(o) }, 'Situação') : null,
+        h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir'))))))));
 }
 
 async function telaOcorrencias(query) {
@@ -1001,6 +1075,7 @@ async function telaOcorrencias(query) {
   campo('Empresa', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todas'], ...empresas.map((e) => [e.id, e.razao_social])] }),
   campo('Tipo', { tag: 'select', name: 'tipo', valor: filtros.get('tipo'), opcoes: [['', 'Todos'], ...Object.entries(opcoes.tipos)] }),
   campo('Causa', { tag: 'select', name: 'causa', valor: filtros.get('causa'), opcoes: [['', 'Todas'], ...Object.entries(opcoes.causas)] }),
+  campo('Situação da multa', { tag: 'select', name: 'situacao', valor: filtros.get('situacao'), opcoes: [['', 'Todas'], ...Object.entries(opcoes.situacoes_multa)] }),
   campo('De', { type: 'date', name: 'inicio', valor: filtros.get('inicio') }),
   campo('Até', { type: 'date', name: 'fim', valor: filtros.get('fim') }),
   h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
@@ -1024,13 +1099,20 @@ async function telaPerfilEmpresa(id, query) {
     inicio: filtros.get('inicio') || PERIODO_PADRAO.inicio,
     fim: filtros.get('fim') || PERIODO_PADRAO.fim,
   });
-  const [empresas, rel, notas, ocorrencias, op] = await Promise.all([
+  const [empresas, rel, notas, ocorrencias, op, demandas, vencimentos] = await Promise.all([
     api('/api/empresas'),
     api(`/api/relatorio?${periodo}&empresa_id=${id}`),
     api(`/api/solicitacoes?${periodo}&empresa_id=${id}`),
     api(`/api/ocorrencias?${periodo}&empresa_id=${id}`),
     obterOpcoesOcorrencia(),
+    api(`/api/demandas?empresa_id=${id}`),
+    api(`/api/vencimentos?mes=&empresa_id=${id}`),
   ]);
+  const avaliacoes = await api(`/api/pesquisas?empresa_id=${id}&inicio=2000-01-01`);
+  const cobrancas = ehGestor() ? (await api(`/api/honorarios?competencia=&empresa_id=${id}`)).lista.slice(-12) : null;
+  // No perfil: vencimentos pendentes (inclusive vencidos) e os 5 últimos já resolvidos.
+  const pendentes = vencimentos.lista.filter((v) => v.status === 'pendente');
+  const resolvidos = vencimentos.lista.filter((v) => v.status !== 'pendente').slice(-5);
   const e = empresas.find((x) => String(x.id) === String(id));
   if (!e) throw new Error('Empresa não encontrada.');
   const r = rel.empresas[0];
@@ -1048,21 +1130,49 @@ async function telaPerfilEmpresa(id, query) {
     h('div', { class: 'cabecalho-pagina' },
       h('div', {},
         h('h1', {}, e.razao_social),
-        h('div', { class: 'suave' }, `CNPJ ${documento(e.cnpj)} · `, descricaoPlanoTexto(e),
+        h('div', { class: 'suave' }, `${e.cnpj.length === 11 ? 'CPF' : 'CNPJ'} ${documento(e.cnpj)} · `,
+          rotuloRegime(e) ? `${rotuloRegime(e)} · ` : '', descricaoPlanoTexto(e),
           e.honorario_centavos != null ? ` · honorário ${moeda(e.honorario_centavos)}` : '',
           e.responsavel_nome ? ` · responsável: ${e.responsavel_nome}` : '')),
       h('div', { class: 'acoes', style: { marginTop: 0 } },
         h('button', { class: 'secundario', onclick: () => window.print() }, 'Imprimir ficha / PDF'),
         h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar cadastro'),
         h('button', { class: 'secundario', onclick: () => abrirExclusaoEmpresa(e, { aoExcluir: () => { location.hash = '#/empresas'; } }) }, 'Excluir empresa'),
-        h('a', { href: '#/empresas' }, '← Empresas'))),
+        h('a', { href: '#/empresas' }, '← Clientes'))),
+    cartaoCadastro(e),
     h('div', { class: 'acoes-rapidas' },
-      h('button', { class: 'acao-rapida destaque', onclick: () => abrirDialogoNota(e) },
+      h('button', { class: 'acao-rapida destaque', onclick: () => abrirFormularioDemanda({}, e) },
+        h('strong', {}, 'Nova demanda'), h('span', {}, 'Pedido, declaração, certidão…')),
+      h('button', { class: 'acao-rapida', onclick: () => abrirFormularioVencimento({}, e) },
+        h('strong', {}, 'Novo vencimento'), h('span', {}, 'Guia a pagar, com valor e data')),
+      h('button', { class: 'acao-rapida', onclick: () => abrirDialogoNota(e) },
         h('strong', {}, 'Registrar nota emitida'), h('span', {}, 'Com XML, os dados são lidos sozinhos')),
       h('button', { class: 'acao-rapida roxo', onclick: () => abrirDialogoOcorrencia('guia_recalculada', e) },
         h('strong', {}, 'Registrar guia recalculada'), h('span', {}, 'Anexe a nova guia e informe o motivo')),
       h('button', { class: 'acao-rapida escuro', onclick: () => abrirDialogoOcorrencia('multa', e) },
         h('strong', {}, 'Registrar multa'), h('span', {}, 'Anexe a guia da multa, motivo e causa'))),
+    h('h2', {}, 'Demandas em aberto'),
+    demandas.lista.length
+      ? h('div', { style: { marginBottom: '20px' } }, tabelaDemandas(demandas.lista, { mostrarCliente: false }))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma demanda em aberto.'),
+    h('h2', {}, 'Vencimentos'),
+    pendentes.length || resolvidos.length
+      ? h('div', { style: { marginBottom: '20px' } }, tabelaVencimentos([...resolvidos, ...pendentes], { mostrarCliente: false }))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum vencimento cadastrado.'),
+    cobrancas ? h('div', {},
+      h('div', { class: 'cabecalho-pagina', style: { marginBottom: '10px' } }, h('h2', { style: { margin: 0 } }, 'Honorários'),
+        h('button', { class: 'secundario', onclick: () => abrirFormularioHonorario({}, e) }, '+ Nova cobrança')),
+      cobrancas.length
+        ? h('div', { style: { marginBottom: '20px' } }, tabelaHonorarios(cobrancas, { mostrarCliente: false }))
+        : h('div', { class: 'cartao vazio' }, 'Nenhuma cobrança de honorário registrada.')) : null,
+    h('div', { class: 'cabecalho-pagina', style: { marginBottom: '10px' } }, h('h2', { style: { margin: 0 } }, 'Pesquisas de satisfação'),
+      h('button', { class: 'secundario', onclick: () => abrirNovaPesquisa(e) }, '+ Nova pesquisa')),
+    avaliacoes.aguardando.length
+      ? h('div', { style: { marginBottom: '12px' } }, tabelaAguardando(avaliacoes.aguardando, { mostrarCliente: false })) : null,
+    avaliacoes.respostas.length
+      ? h('div', { style: { marginBottom: '20px' } }, tabelaRespostas(avaliacoes.respostas.slice(0, 5), { mostrarCliente: false }))
+      : h('div', { class: 'cartao vazio' }, 'Este cliente ainda não respondeu nenhuma pesquisa.'),
+    h('h2', {}, 'Notas, guias recalculadas e multas'),
     h('form', {
       class: 'filtros',
       onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl(`empresa/${id}`, dadosFormulario(ev.target)); },
@@ -1104,6 +1214,25 @@ async function telaPerfilEmpresa(id, query) {
     ocorrencias.length
       ? tabelaOcorrencias(ocorrencias, op, { mostrarEmpresa: false, aoExcluir: rotear })
       : h('div', { class: 'cartao vazio' }, 'Nenhuma ocorrência neste período.'));
+}
+
+// Dados cadastrais do cliente no topo do perfil (também saem na ficha impressa).
+function cartaoCadastro(e) {
+  const local = [e.endereco, [e.cidade, e.uf].filter(Boolean).join('/')].filter(Boolean).join(' · ');
+  const itens = [
+    ['Nome fantasia', e.nome_fantasia],
+    ['Regime tributário', rotuloRegime(e)],
+    ['Situação', e.ativo ? 'Ativo' : 'Inativo'],
+    ['Início do contrato', e.data_contrato ? data(e.data_contrato) : null],
+    ['Honorário', e.honorario_centavos != null
+      ? `${moeda(e.honorario_centavos)}${e.dia_vencimento ? ` · vence dia ${e.dia_vencimento}` : ''}` : null],
+    ['Contato', [e.email, e.telefone].filter(Boolean).join(' · ')],
+    ['Endereço', local],
+  ];
+  return h('div', { class: 'cartao' },
+    h('dl', { class: 'detalhes' },
+      itens.map(([rotulo, valor]) => h('div', {}, h('dt', {}, rotulo), h('dd', {}, valor || h('span', { class: 'suave' }, '—')))),
+      e.observacoes ? h('div', { class: 'inteira' }, h('dt', {}, 'Observações'), h('dd', {}, e.observacoes)) : null));
 }
 
 function descricaoPlanoTexto(e) {
@@ -1198,6 +1327,30 @@ async function telaRelatorio(query) {
       `Notas contam pela data de emissão. Honorário por demanda = honorário do período ÷ (notas + guias + multas): quanto menor, mais trabalho o cliente dá pelo que paga. Alerta de plano: cliente sem plano com média de ${String(rel.limites.mediaNotasSemPlano).replace('.', ',')} ou mais notas/mês, ou com plano que passou da franquia em algum mês.`));
 }
 
+const rotuloPerfil = (u) => (u.papel === 'cliente' ? 'Cliente' : u.admin ? 'Administrador' : u.gestor ? 'Gestor' : 'Colaborador');
+const perfilDe = (u) => (u.admin ? 'admin' : u.gestor ? 'gestor' : 'colaborador');
+const PERFIS_EQUIPE = [
+  ['colaborador', 'Colaborador — altera as próprias demandas'],
+  ['gestor', 'Gestor — altera e exclui demandas e vencimentos de todos'],
+  ['admin', 'Administrador — tudo, inclusive perfis e exclusão em lote'],
+];
+
+function abrirPerfilUsuario(u) {
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/usuarios/${u.id}`, { metodo: 'PUT', dados: { nome: u.nome, ativo: Boolean(u.ativo), perfil: dados.perfil } });
+      dialogo.close();
+      avisar('Perfil alterado.');
+      rotear();
+    }),
+  },
+  h('h2', {}, `Perfil de ${u.nome}`),
+  h('div', { class: 'grade' }, campo('Perfil na equipe', { tag: 'select', name: 'perfil', valor: perfilDe(u), opcoes: PERFIS_EQUIPE }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
 async function telaUsuarios() {
   const [usuarios, empresas] = await Promise.all([api('/api/usuarios'), api('/api/empresas')]);
 
@@ -1216,25 +1369,15 @@ async function telaUsuarios() {
     campo('E-mail *', { type: 'email', name: 'email', required: true }),
     campo('Senha inicial *', { type: 'text', name: 'senha', required: true, minlength: 8, autocomplete: 'new-password' }),
     opcoes.clientes_entram
-      ? [campo('Perfil', { tag: 'select', name: 'papel', opcoes: [['escritorio', 'Equipe do escritório'], ['cliente', 'Cliente (empresa)']] }),
+      ? [campo('Tipo de acesso', { tag: 'select', name: 'papel', opcoes: [['escritorio', 'Equipe do escritório'], ['cliente', 'Cliente (empresa)']] }),
         campo('Empresa (para clientes)', { tag: 'select', name: 'empresa_id', opcoes: [['', '—'], ...empresas.map((e) => [e.id, e.razao_social])] })]
       : h('input', { type: 'hidden', name: 'papel', value: 'escritorio' }),
-    usuario.admin ? h('label', { class: 'checkbox' }, h('input', { type: 'checkbox', name: 'admin', value: '1' }), 'Administrador (pode excluir em lote e gerenciar administradores)') : null),
+    usuario.admin ? campo('Perfil na equipe', { tag: 'select', name: 'perfil', valor: 'colaborador', opcoes: PERFIS_EQUIPE }) : null),
   h('div', { class: 'acoes' }, h('button', { type: 'submit' }, 'Criar usuário')));
 
   const alternarAtivo = async (u) => {
     try {
       await api(`/api/usuarios/${u.id}`, { metodo: 'PUT', dados: { nome: u.nome, ativo: !u.ativo } });
-      rotear();
-    } catch (err) {
-      avisar(err.message, 'erro');
-    }
-  };
-  const alternarAdmin = async (u) => {
-    const acao = u.admin ? 'remover o perfil de administrador de' : 'tornar administrador(a)';
-    if (!confirm(`Deseja ${acao} ${u.nome}?`)) return;
-    try {
-      await api(`/api/usuarios/${u.id}`, { metodo: 'PUT', dados: { nome: u.nome, ativo: Boolean(u.ativo), admin: !u.admin } });
       rotear();
     } catch (err) {
       avisar(err.message, 'erro');
@@ -1259,14 +1402,15 @@ async function telaUsuarios() {
       h('tbody', {}, usuarios.map((u) => h('tr', {},
         h('td', {}, u.nome),
         h('td', {}, u.email),
-        h('td', {}, u.papel === 'escritorio' ? 'Escritório' : 'Cliente',
-          u.admin ? h('div', {}, h('span', { class: 'etiqueta', style: { '--cor': 'var(--rosa)' } }, 'Administrador')) : null),
+        h('td', {}, u.papel === 'escritorio'
+          ? etiquetaCor(rotuloPerfil(u), u.admin ? 'var(--rosa)' : u.gestor ? 'var(--roxo)' : 'var(--azul)')
+          : 'Cliente'),
         h('td', {}, u.empresa_nome ?? '—'),
         h('td', {}, u.ativo ? 'Ativo' : 'Inativo'),
         h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
           h('button', { class: 'secundario', onclick: () => redefinirSenha(u) }, 'Redefinir senha'),
           usuario.admin && u.papel === 'escritorio' && u.id !== usuario.id
-            && h('button', { class: 'secundario', onclick: () => alternarAdmin(u) }, u.admin ? 'Remover admin' : 'Tornar admin'),
+            && h('button', { class: 'secundario', onclick: () => abrirPerfilUsuario(u) }, 'Alterar perfil'),
           u.id !== usuario.id && h('button', { class: 'secundario', onclick: () => alternarAtivo(u) }, u.ativo ? 'Desativar' : 'Reativar')))))))));
 }
 
@@ -1636,10 +1780,10 @@ async function telaPainelMes(query) {
 
   renderizar(
     h('div', { class: 'cabecalho-pagina' },
-      h('h1', {}, `Painel de ${nomeDoMes(mes)}`),
+      h('h1', {}, `Painel de notas · ${nomeDoMes(mes)}`),
       h('form', {
         class: 'filtros', style: { marginBottom: 0 },
-        onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('', dadosFormulario(ev.target)); },
+        onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('painel-notas', dadosFormulario(ev.target)); },
         onchange: (ev) => ev.currentTarget.requestSubmit(),
       },
       campo('Mês', { type: 'month', name: 'mes', valor: mes }),
@@ -1662,7 +1806,7 @@ async function telaPainelMes(query) {
       h('div', { class: 'cartao' },
         h('h2', {}, 'Franquia de notas no mês'),
         comFranquia.length
-          ? h('table', {},
+          ? h('table', { class: 'manter' },
             h('thead', {}, h('tr', {}, h('th', {}, 'Cliente'), h('th', { class: 'num' }, 'Usadas'), h('th', {}, 'Uso'))),
             h('tbody', {}, comFranquia.map((e) => {
               const pct = Math.round(e.uso * 100);
@@ -1677,7 +1821,7 @@ async function telaPainelMes(query) {
       h('div', { class: 'cartao' },
         h('h2', {}, 'Quem mais pediu notas'),
         maisNotas.length
-          ? h('table', {}, h('tbody', {}, maisNotas.map((e) => h('tr', {},
+          ? h('table', { class: 'manter' }, h('tbody', {}, maisNotas.map((e) => h('tr', {},
             h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social),
               h('div', { class: 'suave' }, e.plano_notas ? (e.plano_nome || 'Com plano') : 'Sem plano de notas')),
             h('td', { class: 'num' }, h('strong', {}, e.notas.total))))))
@@ -1745,6 +1889,1162 @@ async function telaNotas(query) {
       : h('div', { class: 'cartao vazio' }, 'Nenhuma nota neste filtro. Use "Registrar nota" ou "Lançar XMLs em lote".'));
 }
 
+// ---------------------------------------------------------------------------
+// Demandas
+// ---------------------------------------------------------------------------
+
+const ehGestor = () => Boolean(usuario.admin || usuario.gestor);
+const etiquetaCor = (texto, cor) => h('span', { class: 'etiqueta', style: { '--cor': cor } }, texto);
+const CORES_STATUS_DEMANDA = {
+  aberta: 'var(--azul)', em_andamento: 'var(--azul-claro)', aguardando_cliente: 'var(--pendente)',
+  concluida: 'var(--emitida)', cancelada: 'var(--cancelada)',
+};
+const CORES_PRIORIDADE = { urgente: 'var(--rosa)', alta: 'var(--roxo)', media: 'var(--azul)', baixa: 'var(--cancelada)' };
+const etiquetaStatusDemanda = (s) => etiquetaCor(opcoes.status_demanda[s] ?? s, CORES_STATUS_DEMANDA[s]);
+const etiquetaPrioridade = (p) => etiquetaCor(opcoes.prioridades[p] ?? p, CORES_PRIORIDADE[p]);
+const rotuloTipoDemanda = (d) => rotuloComOutro(opcoes.tipos_demanda, d.tipo, d.tipo_outro);
+const prazoDemanda = (d) => (d.prazo
+  ? h('span', { class: d.atrasada ? 'atrasado' : null }, data(d.prazo), d.atrasada ? ' · atrasada' : '')
+  : h('span', { class: 'suave' }, 'sem prazo'));
+
+async function abrirFormularioDemanda(d = {}, empresaFixa = null) {
+  const [empresas, equipe] = await Promise.all([empresaFixa ? [] : api('/api/empresas'), equipeDoEscritorio()]);
+  const tipo = campo('Tipo *', {
+    tag: 'select', name: 'tipo', required: true, valor: d.tipo ?? '',
+    opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.tipos_demanda)],
+  });
+  const canal = campo('Pedido recebido por', {
+    tag: 'select', name: 'canal', valor: d.canal ?? '', opcoes: [['', '—'], ...Object.entries(opcoes.canais)],
+  });
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      if (empresaFixa) dados.empresa_id = empresaFixa.id;
+      if (d.id) await api(`/api/demandas/${d.id}`, { metodo: 'PUT', dados });
+      else await api('/api/demandas', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar(d.id ? 'Demanda atualizada.' : 'Demanda criada.');
+      rotear();
+    }),
+  },
+  h('h2', {}, d.id ? 'Editar demanda' : `Nova demanda${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`),
+  h('div', { class: 'grade' },
+    empresaFixa ? null : campo('Cliente *', {
+      tag: 'select', name: 'empresa_id', required: true, valor: d.empresa_id ?? '',
+      opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo || e.id === d.empresa_id).map((e) => [e.id, e.razao_social])],
+    }, { inteira: true }),
+    campo('Título *', { name: 'titulo', required: true, maxlength: 200, valor: d.titulo, placeholder: 'Ex.: CND federal para licitação' }, { inteira: true }),
+    comOutro(tipo, 'tipo_outro', { valor: d.tipo_outro ?? '', rotulo: 'Qual tipo' }),
+    campo('Prioridade', { tag: 'select', name: 'prioridade', valor: d.prioridade ?? 'media', opcoes: Object.entries(opcoes.prioridades) }),
+    campo('Responsável', {
+      tag: 'select', name: 'responsavel_id', valor: d.id ? d.responsavel_id ?? '' : usuario.id,
+      opcoes: [['', '— sem responsável —'], ...equipe.map((u) => [u.id, u.nome])],
+    }),
+    campo('Prazo', { type: 'date', name: 'prazo', valor: d.prazo }),
+    comOutro(canal, 'canal_outro', { valor: d.canal_outro ?? '', rotulo: 'Qual canal' }),
+    campo('Descrição', { tag: 'textarea', name: 'descricao', maxlength: 4000, valor: d.descricao }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+  dialogo.classList.add('largo');
+}
+
+async function mudarStatusDemanda(d, status) {
+  const enviar = (mensagem) => api(`/api/demandas/${d.id}/status`, { metodo: 'POST', dados: { status, mensagem } });
+  if (status !== 'cancelada' && status !== 'concluida') {
+    try {
+      await enviar(null);
+      rotear();
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+    return;
+  }
+  // Concluir aceita uma observação; cancelar exige o motivo.
+  const cancelar = status === 'cancelada';
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await enviar(dados.mensagem);
+      dialogo.close();
+      rotear();
+    }),
+  },
+  h('h2', {}, cancelar ? 'Cancelar demanda' : 'Concluir demanda'),
+  h('p', { class: 'suave' }, d.titulo),
+  h('div', { class: 'grade' },
+    campo(cancelar ? 'Motivo do cancelamento *' : 'Observação (opcional)', {
+      tag: 'textarea', name: 'mensagem', required: cancelar, maxlength: 2000,
+    }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit', class: cancelar ? 'perigo' : null }, cancelar ? 'Cancelar demanda' : 'Concluir'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Voltar'))));
+}
+
+// Botões de status conforme a situação atual da demanda.
+function acoesStatusDemanda(d) {
+  const botao = (status, rotulo, classe = 'secundario') => h('button', { class: classe, onclick: () => mudarStatusDemanda(d, status) }, rotulo);
+  if (['concluida', 'cancelada'].includes(d.status)) return [botao('aberta', 'Reabrir')];
+  return [
+    d.status !== 'em_andamento' ? botao('em_andamento', 'Iniciar') : null,
+    d.status !== 'aguardando_cliente' ? botao('aguardando_cliente', 'Aguardando cliente') : null,
+    botao('concluida', 'Concluir', ''),
+    botao('cancelada', 'Cancelar'),
+  ];
+}
+
+function tabelaDemandas(lista, { mostrarCliente = true } = {}) {
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Prazo', 'Demanda', mostrarCliente ? 'Cliente' : null, 'Prioridade', 'Status', 'Responsável']
+      .filter(Boolean).map((t) => h('th', {}, t)))),
+    h('tbody', {}, lista.map((d) => h('tr', { class: 'clicavel', onclick: () => { location.hash = `#/demanda/${d.id}`; } },
+      h('td', {}, prazoDemanda(d)),
+      h('td', {}, h('a', { href: `#/demanda/${d.id}` }, h('strong', {}, d.titulo)),
+        h('div', { class: 'suave' }, rotuloTipoDemanda(d), d.comentarios ? ` · ${d.comentarios} comentário(s)` : '')),
+      mostrarCliente ? h('td', {}, d.empresa_nome) : null,
+      h('td', {}, etiquetaPrioridade(d.prioridade)),
+      h('td', {}, etiquetaStatusDemanda(d.status)),
+      h('td', {}, d.responsavel_nome ?? h('span', { class: 'suave' }, 'sem responsável')))))));
+}
+
+async function telaDemandas(query) {
+  const filtros = new URLSearchParams(query);
+  const [{ lista, resumo }, empresas, equipe] = await Promise.all([
+    api(`/api/demandas?${filtros}`), api('/api/empresas'), equipeDoEscritorio(),
+  ]);
+  const status = filtros.get('status') || 'abertas';
+  const indicador = (valor, numero, rotulo, cor) => h('div', {
+    class: `indicador${status === valor ? ' selecionado' : ''}`, style: { '--cor': cor },
+    onclick: () => { filtros.set('status', status === valor ? 'abertas' : valor); location.hash = `#/demandas?${filtros}`; },
+  }, h('div', { class: 'numero' }, numero), h('div', { class: 'rotulo' }, rotulo));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, 'Demandas'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'destaque', onclick: () => abrirFormularioDemanda() }, '+ Nova demanda'))),
+    h('div', { class: 'indicadores' },
+      indicador('aberta', resumo.aberta, 'Abertas', CORES_STATUS_DEMANDA.aberta),
+      indicador('em_andamento', resumo.em_andamento, 'Em andamento', CORES_STATUS_DEMANDA.em_andamento),
+      indicador('aguardando_cliente', resumo.aguardando_cliente, 'Aguardando cliente', CORES_STATUS_DEMANDA.aguardando_cliente),
+      indicador('atrasadas', resumo.atrasadas, 'Com prazo vencido', 'var(--rosa)'),
+      indicador('concluida', resumo.concluida, 'Concluídas', CORES_STATUS_DEMANDA.concluida)),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('demandas', dadosFormulario(ev.target)); },
+      onchange: (ev) => { if (ev.target.tagName === 'SELECT') ev.currentTarget.requestSubmit(); },
+    },
+    campo('Situação', {
+      tag: 'select', name: 'status', valor: status,
+      opcoes: [['abertas', 'Em aberto'], ['atrasadas', 'Com prazo vencido'], ...Object.entries(opcoes.status_demanda), ['todas', 'Todas']],
+    }),
+    campo('Responsável', {
+      tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'),
+      opcoes: [['', 'Toda a equipe'], ['eu', 'Minhas'], ['nenhum', 'Sem responsável'], ...equipe.map((u) => [u.id, u.nome])],
+    }),
+    campo('Cliente', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todos'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+    campo('Prioridade', { tag: 'select', name: 'prioridade', valor: filtros.get('prioridade'), opcoes: [['', 'Todas'], ...Object.entries(opcoes.prioridades)] }),
+    campo('Busca', { type: 'search', name: 'busca', valor: filtros.get('busca'), placeholder: 'Título, descrição, cliente…' }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Filtrar')),
+    lista.length
+      ? h('div', {}, h('p', { class: 'suave' }, `${lista.length} demanda(s)`), tabelaDemandas(lista))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma demanda neste filtro.'));
+}
+
+async function telaDemanda(id) {
+  const d = await api(`/api/demandas/${id}`);
+  const excluir = async () => {
+    if (!confirm(`Excluir a demanda "${d.titulo}" e todo o histórico?`)) return;
+    try {
+      await api(`/api/demandas/${d.id}`, { metodo: 'DELETE', dados: {} });
+      avisar('Demanda excluída.');
+      location.hash = '#/demandas';
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+  };
+  const assumir = async () => {
+    try {
+      await api(`/api/demandas/${d.id}`, { metodo: 'PUT', dados: { ...d, responsavel_id: usuario.id } });
+      rotear();
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+  };
+  const item = (rotulo, valor, inteira = false) => h('div', { class: inteira ? 'inteira' : null },
+    h('dt', {}, rotulo), h('dd', {}, valor || h('span', { class: 'suave' }, '—')));
+  const rotuloEvento = (ev) => {
+    if (ev.acao.startsWith('status:')) return `Status: ${opcoes.status_demanda[ev.acao.slice(7)]}`;
+    return { criada: 'Demanda criada', editada: 'Demanda alterada', comentario: 'Comentário' }[ev.acao] ?? ev.acao;
+  };
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('div', {}, h('h1', {}, d.titulo), h('div', { class: 'acoes', style: { marginTop: '6px' } },
+        etiquetaStatusDemanda(d.status), etiquetaPrioridade(d.prioridade), d.atrasada ? etiquetaCor('Prazo vencido', 'var(--rejeitada)') : null)),
+      h('a', { href: '#/demandas' }, '← Demandas')),
+    h('div', { class: 'colunas' },
+      h('div', {},
+        h('div', { class: 'cartao' },
+          h('dl', { class: 'detalhes' },
+            item('Cliente', h('a', { href: `#/empresa/${d.empresa_id}` }, d.empresa_nome)),
+            item('Tipo', rotuloTipoDemanda(d)),
+            item('Prazo', d.prazo ? prazoDemanda(d) : null),
+            item('Responsável', d.responsavel_nome),
+            item('Pedido recebido por', d.canal ? rotuloComOutro(opcoes.canais, d.canal, d.canal_outro) : null),
+            item('Criada por', `${d.criado_por_nome ?? '—'} · ${dataHora(d.criado_em)}`),
+            d.concluida_em ? item('Concluída em', data(d.concluida_em)) : null,
+            item('Descrição', d.descricao, true))),
+        d.pode_alterar
+          ? h('div', { class: 'cartao' }, h('h2', {}, 'Ações'),
+            h('div', { class: 'acoes', style: { marginTop: 0 } },
+              acoesStatusDemanda(d),
+              d.responsavel_id !== usuario.id ? h('button', { class: 'secundario', onclick: assumir }, 'Assumir') : null,
+              h('button', { class: 'secundario', onclick: () => abrirFormularioDemanda(d) }, 'Editar'),
+              d.pode_excluir ? h('button', { class: 'secundario', onclick: excluir }, 'Excluir') : null))
+          : h('div', { class: 'alerta info' }, `Esta demanda está com ${d.responsavel_nome}. Só o responsável, quem criou ou um gestor altera; você pode comentar.`)),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Histórico e comentários'),
+        h('ul', { class: 'linha-tempo' }, d.historico.map((ev) => h('li', {},
+          h('div', {}, h('strong', {}, rotuloEvento(ev))),
+          h('div', { class: 'quando' }, `${ev.usuario_nome ?? 'Sistema'} · ${dataHora(ev.criado_em)}`),
+          ev.mensagem && h('div', { class: 'msg' }, ev.mensagem)))),
+        h('form', {
+          style: { marginTop: '12px' },
+          onsubmit: aoEnviar(async (dados) => {
+            await api(`/api/demandas/${d.id}/comentarios`, { metodo: 'POST', dados });
+            rotear();
+          }),
+        },
+        campo('Adicionar comentário', { tag: 'textarea', name: 'mensagem', required: true, maxlength: 4000, placeholder: 'Andamento, retorno do cliente…' }),
+        h('div', { class: 'acoes' }, h('button', { type: 'submit', class: 'secundario' }, 'Comentar'))))));
+}
+
+// ---------------------------------------------------------------------------
+// Vencimentos
+// ---------------------------------------------------------------------------
+
+const CORES_SITUACAO_VENCIMENTO = { a_vencer: 'var(--azul)', vencido: 'var(--rejeitada)', pago: 'var(--emitida)', cancelado: 'var(--cancelada)' };
+const etiquetaSituacao = (s) => etiquetaCor(opcoes.situacoes_vencimento[s] ?? s, CORES_SITUACAO_VENCIMENTO[s]);
+const rotuloTributo = (v) => rotuloComOutro(opcoes.tributos, v.tributo, v.tributo_outro);
+const mesAnterior = () => {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+async function abrirFormularioVencimento(v = {}, empresaFixa = null) {
+  const empresas = empresaFixa ? [] : await api('/api/empresas');
+  const tributo = campo('Tributo *', {
+    tag: 'select', name: 'tributo', required: true, valor: v.tributo ?? '', opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.tributos)],
+  });
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      if (empresaFixa) dados.empresa_id = empresaFixa.id;
+      if (v.id) await api(`/api/vencimentos/${v.id}`, { metodo: 'PUT', dados });
+      else await api('/api/vencimentos', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar('Vencimento salvo.');
+      rotear();
+    }),
+  },
+  h('h2', {}, v.id ? 'Editar vencimento' : `Novo vencimento${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`),
+  h('div', { class: 'grade' },
+    empresaFixa ? null : campo('Cliente *', {
+      tag: 'select', name: 'empresa_id', required: true, valor: v.empresa_id ?? '',
+      opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo || e.id === v.empresa_id).map((e) => [e.id, e.razao_social])],
+    }, { inteira: true }),
+    comOutro(tributo, 'tributo_outro', { valor: v.tributo_outro ?? '', rotulo: 'Qual tributo' }),
+    campo('Competência', { type: 'month', name: 'competencia', valor: v.competencia ?? (v.id ? '' : mesAnterior()) }),
+    campo('Vencimento *', { type: 'date', name: 'vencimento', required: true, valor: v.vencimento }),
+    campo('Valor (R$)', { name: 'valor', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(v.valor_centavos) }),
+    campo('Descrição', { name: 'descricao', maxlength: 200, valor: v.descricao, placeholder: 'Ex.: parcela 3/10' }),
+    campo('Código de barras', { name: 'codigo_barras', maxlength: 100, valor: v.codigo_barras }),
+    campo('Observações', { tag: 'textarea', name: 'observacoes', maxlength: 2000, valor: v.observacoes }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar'),
+    // Ações menos frequentes ficam aqui para não lotar a tabela.
+    v.id && v.status === 'pendente' ? h('button', {
+      type: 'button', class: 'secundario',
+      onclick: () => { if (confirm('Cancelar este vencimento (a guia não será mais cobrada)?')) { dialogo.close(); acaoVencimento(v, 'cancelar'); } },
+    }, 'Cancelar vencimento') : null,
+    v.id && ehGestor() ? h('button', { type: 'button', class: 'perigo', onclick: () => { dialogo.close(); excluirVencimento(v); } }, 'Excluir') : null)));
+}
+
+async function acaoVencimento(v, acao, dados = {}) {
+  try {
+    await api(`/api/vencimentos/${v.id}/acao`, { metodo: 'POST', dados: { acao, ...dados } });
+    rotear();
+  } catch (err) {
+    avisar(err.message, 'erro');
+  }
+}
+
+function abrirPagamento(v) {
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/vencimentos/${v.id}/acao`, { metodo: 'POST', dados: { acao: 'pagar', ...dados } });
+      dialogo.close();
+      avisar('Pagamento registrado.');
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Confirmar pagamento'),
+  h('p', { class: 'suave' }, `${v.empresa_nome} · ${rotuloTributo(v)} · vence em ${data(v.vencimento)}`),
+  h('div', { class: 'grade' },
+    campo('Pago em *', { type: 'date', name: 'data', required: true, valor: hoje() }),
+    campo('Valor pago (R$)', { name: 'valor', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(v.valor_centavos) })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Confirmar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
+async function excluirVencimento(v) {
+  if (!confirm(`Excluir ${rotuloTributo(v)} de ${v.empresa_nome} (vence em ${data(v.vencimento)})?`)) return;
+  try {
+    await api(`/api/vencimentos/${v.id}`, { metodo: 'DELETE', dados: {} });
+    avisar('Vencimento excluído.');
+    rotear();
+  } catch (err) {
+    avisar(err.message, 'erro');
+  }
+}
+
+// Gera o mesmo vencimento para todos os clientes ativos dos regimes escolhidos, com prévia.
+function abrirGeracaoVencimentos() {
+  const tributo = campo('Tributo *', {
+    tag: 'select', name: 'tributo', required: true, valor: 'das', opcoes: Object.entries(opcoes.tributos),
+  });
+  const caixas = [...Object.entries(opcoes.regimes), ['sem_regime', 'Regime não informado']].map(([valor, rotulo]) => h('label', { class: 'checkbox' },
+    h('input', { type: 'checkbox', name: 'regimes', value: valor, checked: valor === 'simples_nacional' }), rotulo));
+  const resultado = h('div', {});
+  const ler = (form) => ({
+    ...dadosFormulario(form),
+    regimes: [...form.querySelectorAll('input[name=regimes]:checked')].map((c) => c.value),
+  });
+  // Sugere os regimes de cada tributo mais comum.
+  tributo.querySelector('select').addEventListener('change', (ev) => {
+    const sugestao = { das: ['simples_nacional'], das_mei: ['mei'] }[ev.target.value];
+    if (sugestao) for (const c of caixas) c.querySelector('input').checked = sugestao.includes(c.querySelector('input').value);
+  });
+
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados, form) => {
+      const r = await api('/api/vencimentos/gerar', { metodo: 'POST', dados: ler(form) });
+      dialogo.close();
+      avisar(`${r.criados} vencimento(s) criado(s)${r.ignorados ? `; ${r.ignorados} já existia(m)` : ''}.`);
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Gerar vencimentos do mês'),
+  h('p', { class: 'suave' }, 'Cria o mesmo vencimento para cada cliente ativo dos regimes marcados. Quem já tem esse tributo na competência fica de fora; os valores você completa depois, guia a guia.'),
+  h('div', { class: 'grade' },
+    comOutro(tributo, 'tributo_outro', { rotulo: 'Qual tributo' }),
+    campo('Competência *', { type: 'month', name: 'competencia', required: true, valor: mesAnterior() }),
+    campo('Vencimento *', { type: 'date', name: 'vencimento', required: true })),
+  h('h3', {}, 'Regimes'),
+  h('div', { class: 'caixas' }, caixas),
+  resultado,
+  h('div', { class: 'acoes' },
+    h('button', {
+      type: 'button', class: 'secundario',
+      onclick: async (ev) => {
+        const form = ev.target.closest('form');
+        if (!form.reportValidity()) return;
+        try {
+          const p = await api('/api/vencimentos/gerar/previa', { metodo: 'POST', dados: ler(form) });
+          resultado.replaceChildren(h('div', { class: 'alerta info' },
+            h('strong', {}, `${p.novos} vencimento(s) novo(s)`), p.existentes ? `, ${p.existentes} cliente(s) já têm.` : '.',
+            p.empresas.length ? h('div', { class: 'suave', style: { marginTop: '6px' } },
+              p.empresas.filter((e) => !e.existente).slice(0, 12).map((e) => e.razao_social).join(', '),
+              p.novos > 12 ? '…' : '') : null));
+        } catch (err) {
+          resultado.replaceChildren(h('div', { class: 'alerta erro' }, err.message));
+        }
+      },
+    }, 'Ver prévia'),
+    h('button', { type: 'submit' }, 'Gerar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+  dialogo.classList.add('largo');
+}
+
+function tabelaVencimentos(lista, { mostrarCliente = true } = {}) {
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Vencimento', mostrarCliente ? 'Cliente' : null, 'Tributo', 'Valor', 'Situação', '']
+      .filter((t) => t !== null).map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+    h('tbody', {}, lista.map((v) => h('tr', {},
+      h('td', {}, h('span', { class: v.situacao === 'vencido' ? 'atrasado' : null }, data(v.vencimento))),
+      mostrarCliente ? h('td', {}, h('a', { href: `#/empresa/${v.empresa_id}` }, v.empresa_nome),
+        v.responsavel_nome ? h('div', { class: 'suave' }, v.responsavel_nome) : null) : null,
+      h('td', {}, rotuloTributo(v), h('div', { class: 'suave' },
+        [v.competencia ? `comp. ${nomeMes(v.competencia)}` : null, v.descricao].filter(Boolean).join(' · '))),
+      h('td', { class: 'num' }, v.situacao === 'pago' && v.valor_pago_centavos != null
+        ? moeda(v.valor_pago_centavos) : v.valor_centavos != null ? moeda(v.valor_centavos) : h('span', { class: 'suave' }, '—')),
+      h('td', {}, etiquetaSituacao(v.situacao), h('div', { class: 'suave' },
+        v.situacao === 'pago' ? `pago em ${data(v.pago_em)}`
+          : v.status === 'pendente' ? (v.enviada_em ? `guia enviada em ${data(v.enviada_em)}` : 'guia não enviada') : '')),
+      h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
+        v.status === 'pendente' && !v.enviada_em ? h('button', { class: 'secundario', onclick: () => acaoVencimento(v, 'enviar') }, 'Guia enviada') : null,
+        v.status === 'pendente' ? h('button', { onclick: () => abrirPagamento(v) }, 'Pago') : null,
+        v.status !== 'pendente' ? h('button', { class: 'secundario', onclick: () => acaoVencimento(v, 'reabrir') }, 'Reabrir') : null,
+        h('button', { class: 'secundario', onclick: () => abrirFormularioVencimento(v) }, 'Editar'))))))));
+}
+
+async function telaVencimentos(query) {
+  const filtros = new URLSearchParams(query);
+  if (!filtros.has('mes')) filtros.set('mes', hoje().slice(0, 7));
+  const [{ lista, resumo }, empresas, equipe] = await Promise.all([
+    api(`/api/vencimentos?${filtros}`), api('/api/empresas'), equipeDoEscritorio(),
+  ]);
+  const situacao = filtros.get('situacao') || '';
+  const indicador = (valor, rotulo, detalhe) => h('div', {
+    class: `indicador${situacao === valor ? ' selecionado' : ''}`, style: { '--cor': CORES_SITUACAO_VENCIMENTO[valor] },
+    onclick: () => { if (situacao === valor) filtros.delete('situacao'); else filtros.set('situacao', valor); location.hash = `#/vencimentos?${filtros}`; },
+  }, h('div', { class: 'numero' }, resumo[valor].quantidade), h('div', { class: 'rotulo' }, rotulo, ' · ', moeda(resumo[valor].valor_centavos)),
+  detalhe ? h('div', { class: 'suave' }, detalhe) : null);
+  const mes = filtros.get('mes');
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, mes ? `Vencimentos de ${nomeDoMes(mes)}` : 'Vencimentos'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'secundario', onclick: abrirGeracaoVencimentos }, 'Gerar do mês'),
+        h('button', { class: 'destaque', onclick: () => abrirFormularioVencimento() }, '+ Novo vencimento'))),
+    h('div', { class: 'indicadores' },
+      indicador('a_vencer', 'A vencer', resumo.sem_envio ? `${resumo.sem_envio} guia(s) não enviada(s)` : null),
+      indicador('vencido', 'Vencidos', mes ? 'inclui meses anteriores ao filtrar' : null),
+      indicador('pago', 'Pagos'),
+      indicador('cancelado', 'Cancelados')),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        const d = dadosFormulario(ev.target);
+        const novo = new URLSearchParams();
+        for (const [k, v] of Object.entries(d)) if (v || k === 'mes') novo.set(k, v);
+        location.hash = `#/vencimentos?${novo}`;
+      },
+      onchange: (ev) => { if (ev.target.tagName === 'SELECT') ev.currentTarget.requestSubmit(); },
+    },
+    campo('Mês do vencimento', { type: 'month', name: 'mes', valor: mes }),
+    campo('Situação', { tag: 'select', name: 'situacao', valor: situacao, opcoes: [['', 'Todas'], ...Object.entries(opcoes.situacoes_vencimento)] }),
+    campo('Cliente', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todos'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+    campo('Tributo', { tag: 'select', name: 'tributo', valor: filtros.get('tributo'), opcoes: [['', 'Todos'], ...Object.entries(opcoes.tributos)] }),
+    campo('Responsável', { tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'), opcoes: [['', 'Toda a equipe'], ...equipe.map((u) => [u.id, u.nome])] }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
+    h('a', { href: `#/vencimentos?mes=${situacao ? `&situacao=${situacao}` : ''}`, class: 'botao secundario' }, 'Todos os meses')),
+    lista.length
+      ? h('div', {}, h('p', { class: 'suave' }, `${lista.length} vencimento(s)`), tabelaVencimentos(lista))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum vencimento neste filtro. Use "Gerar do mês" para criar o DAS de todos os clientes do Simples de uma vez.'));
+}
+
+// ---------------------------------------------------------------------------
+// Honorários e receita (gestores e administradores)
+// ---------------------------------------------------------------------------
+
+const CORES_SITUACAO_HONORARIO = { aberto: 'var(--azul)', atrasado: 'var(--rejeitada)', recebido: 'var(--emitida)', cancelado: 'var(--cancelada)' };
+const etiquetaSituacaoHonorario = (s) => etiquetaCor(opcoes.situacoes_honorario[s] ?? s, CORES_SITUACAO_HONORARIO[s]);
+const rotuloCobranca = (c) => (c.tipo === 'extra' && c.descricao ? c.descricao : opcoes.tipos_honorario[c.tipo] ?? c.tipo);
+// Valor curto para rótulos de gráfico: "R$ 7,7 mil".
+const moedaCurta = (centavos) => (centavos >= 100000
+  ? `R$ ${(centavos / 100000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil`
+  : moeda(centavos));
+
+async function abrirFormularioHonorario(c = {}, empresaFixa = null) {
+  const empresas = empresaFixa ? [] : await api('/api/empresas');
+  const tipo = campo('Tipo *', { tag: 'select', name: 'tipo', valor: c.tipo ?? 'mensal', opcoes: Object.entries(opcoes.tipos_honorario) });
+  const descricao = campo('Descrição', { name: 'descricao', maxlength: 200, valor: c.descricao, placeholder: 'Obrigatória para serviço extra' });
+  const empresaInicial = empresaFixa ?? empresas.find((e) => e.id === c.empresa_id);
+  const valor = campo('Valor (R$) *', {
+    name: 'valor', required: true, inputmode: 'decimal', placeholder: '0,00',
+    valor: reaisCampo(c.valor_centavos ?? (c.id ? null : empresaInicial?.honorario_centavos)),
+  });
+  // Ao escolher o cliente numa cobrança nova, sugere o honorário e o dia de vencimento do cadastro.
+  const vencimento = campo('Vencimento *', { type: 'date', name: 'vencimento', required: true, valor: c.vencimento });
+  const competencia = campo('Competência *', { type: 'month', name: 'competencia', required: true, valor: c.competencia ?? hoje().slice(0, 7) });
+  const sugerir = (e) => {
+    if (c.id || !e) return;
+    if (e.honorario_centavos != null) valor.querySelector('input').value = reaisCampo(e.honorario_centavos);
+    const comp = competencia.querySelector('input').value;
+    if (e.dia_vencimento && comp) {
+      const [ano, mes] = comp.split('-').map(Number);
+      const diaFinal = Math.min(e.dia_vencimento, new Date(ano, mes, 0).getDate());
+      vencimento.querySelector('input').value = `${comp}-${String(diaFinal).padStart(2, '0')}`;
+    }
+  };
+  const seletorEmpresa = empresaFixa ? null : campo('Cliente *', {
+    tag: 'select', name: 'empresa_id', required: true, valor: c.empresa_id ?? '',
+    opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo || e.id === c.empresa_id).map((e) => [e.id, e.razao_social])],
+  }, { inteira: true });
+  seletorEmpresa?.querySelector('select').addEventListener('change', (ev) => sugerir(empresas.find((e) => String(e.id) === ev.target.value)));
+  if (empresaFixa) queueMicrotask(() => sugerir(empresaFixa));
+
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      if (empresaFixa) dados.empresa_id = empresaFixa.id;
+      if (c.id) await api(`/api/honorarios/${c.id}`, { metodo: 'PUT', dados });
+      else await api('/api/honorarios', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar('Cobrança salva.');
+      rotear();
+    }),
+  },
+  h('h2', {}, c.id ? 'Editar cobrança' : `Nova cobrança${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`),
+  h('div', { class: 'grade' },
+    seletorEmpresa, tipo, descricao, competencia, vencimento, valor,
+    campo('Nº da nota do honorário', { name: 'nota_numero', maxlength: 50, valor: c.nota_numero }),
+    campo('Observações', { tag: 'textarea', name: 'observacoes', maxlength: 2000, valor: c.observacoes }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar'),
+    c.id && c.status === 'aberto' ? h('button', {
+      type: 'button', class: 'secundario',
+      onclick: () => { if (confirm('Cancelar esta cobrança?')) { dialogo.close(); acaoHonorario(c, 'cancelar'); } },
+    }, 'Cancelar cobrança') : null,
+    c.id ? h('button', {
+      type: 'button', class: 'perigo',
+      onclick: async () => {
+        if (!confirm(`Excluir a cobrança de ${c.empresa_nome ?? 'cliente'} (${moeda(c.valor_centavos)})?`)) return;
+        try {
+          await api(`/api/honorarios/${c.id}`, { metodo: 'DELETE', dados: {} });
+          dialogo.close();
+          avisar('Cobrança excluída.');
+          rotear();
+        } catch (err) {
+          avisar(err.message, 'erro');
+        }
+      },
+    }, 'Excluir') : null)));
+  dialogo.classList.add('largo');
+}
+
+async function acaoHonorario(c, acao) {
+  try {
+    await api(`/api/honorarios/${c.id}/acao`, { metodo: 'POST', dados: { acao } });
+    rotear();
+  } catch (err) {
+    avisar(err.message, 'erro');
+  }
+}
+
+function abrirRecebimento(c) {
+  const forma = campo('Forma de pagamento', { tag: 'select', name: 'forma_pagamento', valor: 'pix', opcoes: [['', '—'], ...Object.entries(opcoes.formas_pagamento)] });
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/honorarios/${c.id}/acao`, { metodo: 'POST', dados: { acao: 'receber', ...dados } });
+      dialogo.close();
+      avisar('Recebimento registrado.');
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Registrar recebimento'),
+  h('p', { class: 'suave' }, `${c.empresa_nome} · ${rotuloCobranca(c)} · ${nomeMes(c.competencia)} · vence em ${data(c.vencimento)}`),
+  h('div', { class: 'grade' },
+    campo('Recebido em *', { type: 'date', name: 'data', required: true, valor: hoje() }),
+    campo('Valor recebido (R$)', { name: 'valor', inputmode: 'decimal', valor: reaisCampo(c.valor_centavos) }),
+    comOutro(forma, 'forma_outro', { rotulo: 'Qual forma' })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Confirmar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
+function abrirGeracaoHonorarios() {
+  const resultado = h('div', {});
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      const r = await api('/api/honorarios/gerar', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar(`${r.criados} cobrança(s) criada(s)${r.ignorados ? `; ${r.ignorados} já existia(m)` : ''}.`);
+      location.hash = `#/honorarios?competencia=${dados.competencia}`;
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Gerar honorários do mês'),
+  h('p', { class: 'suave' }, 'Cria uma cobrança para cada cliente ativo com honorário no cadastro, pelo valor cadastrado, no dia de vencimento de cada cliente. Quem não tem dia cadastrado usa o dia padrão. Quem já tem a cobrança na competência fica de fora.'),
+  h('div', { class: 'grade' },
+    campo('Tipo', { tag: 'select', name: 'tipo', valor: 'mensal', opcoes: [['mensal', opcoes.tipos_honorario.mensal], ['decimo_terceiro', opcoes.tipos_honorario.decimo_terceiro]] }),
+    campo('Competência *', { type: 'month', name: 'competencia', required: true, valor: hoje().slice(0, 7) }),
+    campo('Dia padrão de vencimento *', { type: 'number', name: 'dia_padrao', required: true, min: 1, max: 31, valor: 10 })),
+  resultado,
+  h('div', { class: 'acoes' },
+    h('button', {
+      type: 'button', class: 'secundario',
+      onclick: async (ev) => {
+        const form = ev.target.closest('form');
+        if (!form.reportValidity()) return;
+        try {
+          const p = await api('/api/honorarios/gerar/previa', { metodo: 'POST', dados: dadosFormulario(form) });
+          const novos = p.empresas.filter((e) => !e.existente);
+          resultado.replaceChildren(h('div', { class: 'alerta info' },
+            h('strong', {}, `${p.novos} cobrança(s) nova(s) · ${moeda(p.valor_centavos)}`),
+            p.existentes ? ` · ${p.existentes} cliente(s) já têm.` : '',
+            p.sem_honorario ? h('div', {}, `${p.sem_honorario} cliente(s) ativo(s) sem honorário no cadastro ficam de fora.`) : null,
+            novos.length ? h('div', { class: 'suave', style: { marginTop: '6px' } },
+              novos.slice(0, 10).map((e) => `${e.razao_social} (${data(e.vencimento)})`).join(', '), novos.length > 10 ? '…' : '') : null));
+        } catch (err) {
+          resultado.replaceChildren(h('div', { class: 'alerta erro' }, err.message));
+        }
+      },
+    }, 'Ver prévia'),
+    h('button', { type: 'submit' }, 'Gerar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+  dialogo.classList.add('largo');
+}
+
+function tabelaHonorarios(lista, { mostrarCliente = true } = {}) {
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Vencimento', mostrarCliente ? 'Cliente' : null, 'Cobrança', 'Valor', 'Situação', '']
+      .filter((t) => t !== null).map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+    h('tbody', {}, lista.map((c) => h('tr', {},
+      h('td', {}, h('span', { class: c.situacao === 'atrasado' ? 'atrasado' : null }, data(c.vencimento))),
+      mostrarCliente ? h('td', {}, h('a', { href: `#/empresa/${c.empresa_id}` }, c.empresa_nome)) : null,
+      h('td', {}, rotuloCobranca(c), h('div', { class: 'suave' },
+        [`comp. ${nomeMes(c.competencia)}`, c.tipo === 'extra' ? 'serviço extra' : null, c.nota_numero ? `NF ${c.nota_numero}` : null].filter(Boolean).join(' · '))),
+      h('td', { class: 'num' }, moeda(c.situacao === 'recebido' ? c.valor_recebido_centavos ?? c.valor_centavos : c.valor_centavos)),
+      h('td', {}, etiquetaSituacaoHonorario(c.situacao), c.situacao === 'recebido' ? h('div', { class: 'suave' },
+        `em ${data(c.recebido_em)}`, c.forma_pagamento ? ` · ${rotuloComOutro(opcoes.formas_pagamento, c.forma_pagamento, c.forma_outro)}` : '') : null),
+      h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
+        c.status === 'aberto' ? h('button', { onclick: () => abrirRecebimento(c) }, 'Recebido') : null,
+        c.status !== 'aberto' ? h('button', { class: 'secundario', onclick: () => acaoHonorario(c, 'reabrir') }, 'Reabrir') : null,
+        h('button', { class: 'secundario', onclick: () => abrirFormularioHonorario(c) }, 'Editar'))))))));
+}
+
+async function telaHonorarios(query) {
+  const filtros = new URLSearchParams(query);
+  if (!filtros.has('competencia')) filtros.set('competencia', hoje().slice(0, 7));
+  const [{ lista, resumo }, empresas, equipe] = await Promise.all([
+    api(`/api/honorarios?${filtros}`), api('/api/empresas'), equipeDoEscritorio(),
+  ]);
+  const situacao = filtros.get('situacao') || '';
+  const competencia = filtros.get('competencia');
+  const indicador = (valor, rotulo) => h('div', {
+    class: `indicador${situacao === valor ? ' selecionado' : ''}`, style: { '--cor': CORES_SITUACAO_HONORARIO[valor] },
+    onclick: () => { if (situacao === valor) filtros.delete('situacao'); else filtros.set('situacao', valor); location.hash = `#/honorarios?${filtros}`; },
+  }, h('div', { class: 'numero' }, moeda(resumo[valor].valor_centavos)), h('div', { class: 'rotulo' }, `${resumo[valor].quantidade} ${rotulo}`));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, competencia ? `Honorários de ${nomeDoMes(competencia)}` : 'Honorários'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('a', { class: 'botao secundario', href: `/api/honorarios.csv?${filtros}` }, 'Exportar CSV'),
+        h('button', { class: 'secundario', onclick: abrirGeracaoHonorarios }, 'Gerar do mês'),
+        h('button', { class: 'destaque', onclick: () => abrirFormularioHonorario() }, '+ Nova cobrança'))),
+    h('div', { class: 'indicadores' },
+      indicador('aberto', 'em aberto, no prazo'),
+      indicador('atrasado', competencia ? 'em atraso (todas as competências)' : 'em atraso'),
+      indicador('recebido', 'recebida(s)'),
+      indicador('cancelado', 'cancelada(s)')),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        const d = dadosFormulario(ev.target);
+        const novo = new URLSearchParams();
+        for (const [k, v] of Object.entries(d)) if (v || k === 'competencia') novo.set(k, v);
+        location.hash = `#/honorarios?${novo}`;
+      },
+      onchange: (ev) => { if (ev.target.tagName === 'SELECT') ev.currentTarget.requestSubmit(); },
+    },
+    campo('Competência', { type: 'month', name: 'competencia', valor: competencia }),
+    campo('Situação', { tag: 'select', name: 'situacao', valor: situacao, opcoes: [['', 'Todas'], ...Object.entries(opcoes.situacoes_honorario)] }),
+    campo('Cliente', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todos'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+    campo('Tipo', { tag: 'select', name: 'tipo', valor: filtros.get('tipo'), opcoes: [['', 'Todos'], ...Object.entries(opcoes.tipos_honorario)] }),
+    campo('Responsável', { tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'), opcoes: [['', 'Toda a equipe'], ...equipe.map((u) => [u.id, u.nome])] }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
+    h('a', { href: `#/honorarios?competencia=${situacao ? `&situacao=${situacao}` : ''}`, class: 'botao secundario' }, 'Todas as competências')),
+    lista.length
+      ? h('div', {}, h('p', { class: 'suave' }, `${lista.length} cobrança(s)`), tabelaHonorarios(lista))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma cobrança neste filtro. Use "Gerar do mês" para criar o honorário de todos os clientes de uma vez.'));
+}
+
+async function telaReceita(query) {
+  const filtros = new URLSearchParams(query);
+  const mes = filtros.get('mes') || hoje().slice(0, 7);
+  const r = await api(`/api/receita?mes=${mes}`);
+  const indicador = (numero, rotulo, detalhe, cor, href) => h('div', {
+    class: 'indicador', style: { '--cor': cor, cursor: href ? 'pointer' : 'default' }, onclick: href ? () => { location.hash = href; } : null,
+  }, h('div', { class: 'rotulo' }, rotulo), h('div', { class: 'numero' }, numero), detalhe ? h('div', { class: 'suave' }, detalhe) : null);
+  const totalTipos = Object.values(r.por_tipo).reduce((t, v) => t + v, 0);
+  const maiorRegime = Math.max(1, ...r.por_regime.map((x) => x.recorrente_centavos));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('div', {}, h('h1', {}, 'Receita'), h('div', { class: 'suave' }, `Honorários de ${nomeDoMes(mes)}`)),
+      h('form', {
+        class: 'filtros', style: { marginBottom: 0 },
+        onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('receita', dadosFormulario(ev.target)); },
+        onchange: (ev) => ev.currentTarget.requestSubmit(),
+      }, campo('Mês', { type: 'month', name: 'mes', valor: mes }))),
+    h('div', { class: 'indicadores' },
+      indicador(moeda(r.recorrente_centavos), 'Receita recorrente (cadastro)', `${r.clientes_com_honorario} cliente(s) com honorário`, 'var(--azul)', null),
+      indicador(moeda(r.faturado_centavos), 'Faturado na competência', null, 'var(--azul-claro)', `#/honorarios?competencia=${mes}`),
+      indicador(moeda(r.recebido_centavos), 'Recebido no mês', 'pela data do recebimento', 'var(--rosa)', null),
+      indicador(moeda(r.atrasado.valor_centavos), 'Em atraso (todas as competências)',
+        `${r.atrasado.cobrancas} cobrança(s) · ${r.atrasado.clientes} cliente(s)`, 'var(--rejeitada)', '#/honorarios?competencia=&situacao=atrasado'),
+      indicador(`${String(r.inadimplencia_mes).replace('.', ',')}%`, 'Inadimplência da competência', 'em atraso ÷ faturado', 'var(--preto)', null)),
+    h('div', { class: 'cartao' },
+      h('h2', {}, 'Faturado e recebido nos últimos 6 meses'),
+      graficoColunas({
+        meses: r.meses,
+        formatar: moedaCurta,
+        formatarCompleto: moeda,
+        largura: window.innerWidth > 900 ? 1040 : 520, // gráfico de largura inteira só no computador
+        eixo: true,
+        series: [
+          { nome: 'Faturado', cor: 'var(--azul-claro)', valores: r.serie.map((x) => x.faturado_centavos) },
+          { nome: 'Recebido', cor: 'var(--rosa)', valores: r.serie.map((x) => x.recebido_centavos) },
+        ],
+      })),
+    h('div', { class: 'colunas-iguais' },
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Receita recorrente por regime'),
+        r.por_regime.length
+          ? h('div', { class: 'rolagem-x' }, h('table', { class: 'manter' },
+            h('thead', {}, h('tr', {}, h('th', {}, 'Regime'), h('th', { class: 'num' }, 'Clientes'), h('th', { class: 'num' }, 'Por mês'))),
+            h('tbody', {}, r.por_regime.map((x) => h('tr', {},
+              h('td', {}, x.rotulo, h('div', { class: 'barra' }, h('span', { style: { width: `${Math.round((x.recorrente_centavos / maiorRegime) * 100)}%` } }))),
+              h('td', { class: 'num' }, x.clientes),
+              h('td', { class: 'num' }, moeda(x.recorrente_centavos)))))))
+          : h('p', { class: 'suave' }, 'Nenhum cliente ativo com honorário no cadastro.')),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Faturado por tipo na competência'),
+        h('table', { class: 'manter' }, h('tbody', {}, Object.entries(opcoes.tipos_honorario).map(([tipo, rotulo]) => h('tr', {},
+          h('td', {}, rotulo, h('div', { class: 'barra' }, h('span', { style: { width: `${totalTipos ? Math.round((r.por_tipo[tipo] / totalTipos) * 100) : 0}%` } }))),
+          h('td', { class: 'num' }, moeda(r.por_tipo[tipo])))))))),
+    h('h2', {}, 'Por cliente'),
+    r.clientes.length
+      ? h('div', { class: 'tabela' }, h('table', {},
+        h('thead', {}, h('tr', {}, ['Cliente', 'Regime', 'Honorário', 'Faturado', 'Recebido', 'Em aberto', 'Em atraso']
+          .map((t, i) => h('th', { class: i >= 2 ? 'num' : null }, t)))),
+        h('tbody', {}, r.clientes.map((c) => h('tr', {},
+          h('td', {}, h('a', { href: `#/empresa/${c.id}` }, c.razao_social), c.ativo ? null : h('div', { class: 'suave' }, 'inativo')),
+          h('td', {}, c.regime ? rotuloComOutro(opcoes.regimes, c.regime, c.regime_outro) : h('span', { class: 'suave' }, '—')),
+          h('td', { class: 'num' }, c.honorario_centavos ? moeda(c.honorario_centavos) : '—'),
+          h('td', { class: 'num' }, c.faturado_centavos ? moeda(c.faturado_centavos) : h('span', { class: 'suave' }, 'não gerado')),
+          h('td', { class: 'num' }, c.recebido_centavos ? moeda(c.recebido_centavos) : '—'),
+          h('td', { class: 'num' }, c.em_aberto_centavos ? moeda(c.em_aberto_centavos) : '—'),
+          h('td', { class: 'num' }, c.atrasado_centavos
+            ? h('a', { class: 'atrasado', href: `#/honorarios?competencia=&situacao=atrasado&empresa_id=${c.id}` },
+              moeda(c.atrasado_centavos), h('div', { class: 'suave' }, `desde ${data(c.atrasado_desde)}`))
+            : '—'))))))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum cliente com honorário ainda.'));
+}
+
+// ---------------------------------------------------------------------------
+// Situação das multas
+// ---------------------------------------------------------------------------
+
+const CORES_SITUACAO_MULTA = { pendente: 'var(--pendente)', paga: 'var(--emitida)', contestada: 'var(--roxo)', cancelada: 'var(--cancelada)' };
+
+function situacaoMulta(o) {
+  if (o.tipo !== 'multa') return h('span', { class: 'suave' }, '—');
+  const vencida = o.situacao === 'pendente' && o.vencimento && o.vencimento < hoje();
+  return [
+    etiquetaCor(opcoes.situacoes_multa[o.situacao] ?? 'Pendente', vencida ? 'var(--rejeitada)' : CORES_SITUACAO_MULTA[o.situacao]),
+    h('div', { class: 'suave' },
+      o.situacao === 'paga' && o.pago_em ? `paga em ${data(o.pago_em)}`
+        : o.situacao === 'pendente' && o.vencimento ? h('span', { class: vencida ? 'atrasado' : null }, `vence em ${data(o.vencimento)}`) : '',
+      o.situacao_obs ? h('div', {}, o.situacao_obs) : null),
+  ];
+}
+
+function abrirSituacaoMulta(o) {
+  const situacao = campo('Situação *', { tag: 'select', name: 'situacao', valor: o.situacao ?? 'pendente', opcoes: Object.entries(opcoes.situacoes_multa) });
+  const pagoEm = campo('Pago em *', { type: 'date', name: 'pago_em', valor: o.pago_em ?? hoje() });
+  const obs = campo('Observação', { tag: 'textarea', name: 'situacao_obs', maxlength: 500, valor: o.situacao_obs, placeholder: 'Ex.: nº do processo de contestação' }, { inteira: true });
+  const atualizar = () => {
+    const s = situacao.querySelector('select').value;
+    pagoEm.hidden = s !== 'paga';
+    pagoEm.querySelector('input').required = s === 'paga';
+    const exigeObs = s === 'contestada' || s === 'cancelada';
+    obs.firstChild.textContent = exigeObs ? 'Observação *' : 'Observação';
+    obs.querySelector('textarea').required = exigeObs;
+  };
+  situacao.querySelector('select').addEventListener('change', atualizar);
+  atualizar();
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/ocorrencias/${o.id}/situacao`, { metodo: 'POST', dados });
+      dialogo.close();
+      avisar('Situação da multa atualizada.');
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Situação da multa'),
+  h('p', { class: 'suave' }, `${o.empresa_nome} · ${data(o.data)}${o.valor_centavos != null ? ` · ${moeda(o.valor_centavos)}` : ''}`),
+  h('div', { class: 'grade' }, situacao, pagoEm, obs),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
+// ---------------------------------------------------------------------------
+// Pesquisas de satisfação (NPS / CSAT)
+// ---------------------------------------------------------------------------
+
+const linkPesquisa = (p) => `${location.origin}/#/pesquisa/${p.token}`;
+const corNps = (n) => (n == null ? 'var(--cancelada)' : n >= 9 ? 'var(--emitida)' : n >= 7 ? 'var(--pendente)' : 'var(--rejeitada)');
+const rotuloNps = (n) => (n == null ? '—' : n >= 9 ? 'Promotor' : n >= 7 ? 'Neutro' : 'Detrator');
+const textoConvite = (p) => `Olá! Queremos saber como está o atendimento da ContabilizaTech. Leva menos de 1 minuto: ${linkPesquisa(p)}`;
+
+async function copiarLink(p) {
+  try {
+    await navigator.clipboard.writeText(linkPesquisa(p));
+    avisar('Link copiado.');
+  } catch {
+    prompt('Copie o link:', linkPesquisa(p));
+  }
+}
+
+const botoesEnvio = (p) => [
+  h('button', { class: 'secundario', onclick: () => copiarLink(p) }, 'Copiar link'),
+  h('a', { class: 'botao secundario', href: `https://wa.me/?text=${encodeURIComponent(textoConvite(p))}`, target: '_blank', rel: 'noopener' }, 'WhatsApp'),
+];
+
+async function abrirNovaPesquisa(empresaFixa = null) {
+  const empresas = empresaFixa ? [] : await api('/api/empresas');
+  const resultado = h('div', {});
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados, form) => {
+      if (empresaFixa) dados.empresa_id = empresaFixa.id;
+      const p = await api('/api/pesquisas', { metodo: 'POST', dados });
+      form.querySelector('button[type=submit]').hidden = true;
+      resultado.replaceChildren(h('div', { class: 'alerta sucesso' },
+        h('strong', {}, 'Link criado. Envie para o cliente:'),
+        h('div', { style: { margin: '8px 0', wordBreak: 'break-all' } }, h('code', {}, linkPesquisa(p))),
+        h('div', { class: 'acoes', style: { marginTop: 0 } }, botoesEnvio(p))));
+      dialogo.addEventListener('close', rotear);
+    }),
+  },
+  h('h2', {}, `Nova pesquisa de satisfação${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`),
+  h('div', { class: 'grade' },
+    empresaFixa ? null : campo('Cliente *', {
+      tag: 'select', name: 'empresa_id', required: true,
+      opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo).map((e) => [e.id, e.razao_social])],
+    }, { inteira: true }),
+    campo('Perguntas', { tag: 'select', name: 'tipo', valor: 'completa', opcoes: Object.entries(opcoes.tipos_pesquisa) }),
+    campo('Link vale por (dias)', { type: 'number', name: 'validade_dias', min: 1, max: 180, valor: 30 })),
+  resultado,
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Criar link'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar'))));
+}
+
+function abrirPesquisaLote() {
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      const r = await api('/api/pesquisas/lote', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar(`${r.criadas} link(s) criado(s)${r.ja_tinham ? `; ${r.ja_tinham} cliente(s) já tinham pesquisa aguardando` : ''}. Envie cada um pela lista.`);
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Pesquisa para todos os clientes'),
+  h('p', { class: 'suave' }, 'Cria um link para cada cliente ativo que ainda não tem pesquisa aguardando resposta. Depois, envie cada link pela lista "Aguardando resposta" (copiar ou WhatsApp).'),
+  h('div', { class: 'grade' },
+    campo('Perguntas', { tag: 'select', name: 'tipo', valor: 'completa', opcoes: Object.entries(opcoes.tipos_pesquisa) }),
+    campo('Link vale por (dias)', { type: 'number', name: 'validade_dias', min: 1, max: 180, valor: 30 })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Criar links'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
+async function excluirPesquisa(p) {
+  const pergunta = p.respondida_em ? `Excluir a resposta de ${p.empresa_nome}? Ela sai dos indicadores.` : `Cancelar o link de ${p.empresa_nome}?`;
+  if (!confirm(pergunta)) return;
+  try {
+    await api(`/api/pesquisas/${p.id}`, { metodo: 'DELETE', dados: {} });
+    rotear();
+  } catch (err) {
+    avisar(err.message, 'erro');
+  }
+}
+
+function tabelaRespostas(respostas, { mostrarCliente = true } = {}) {
+  const media = (p) => {
+    const notas = Object.keys(opcoes.dimensoes_csat).map((c) => p[c]).filter((n) => n != null);
+    return notas.length ? (notas.reduce((t, n) => t + n, 0) / notas.length).toFixed(1).replace('.', ',') : null;
+  };
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Respondida', mostrarCliente ? 'Cliente' : null, 'NPS', 'Satisfação (1 a 5)', 'Comentário', '']
+      .filter((t) => t !== null).map((t) => h('th', {}, t)))),
+    h('tbody', {}, respostas.map((p) => h('tr', {},
+      h('td', {}, dataHora(p.respondida_em)),
+      mostrarCliente ? h('td', {}, h('a', { href: `#/empresa/${p.empresa_id}` }, p.empresa_nome)) : null,
+      h('td', {}, p.nps == null ? h('span', { class: 'suave' }, '—')
+        : [h('strong', {}, p.nps), ' ', etiquetaCor(rotuloNps(p.nps), corNps(p.nps))]),
+      h('td', {}, media(p) == null ? h('span', { class: 'suave' }, '—') : [h('strong', {}, `média ${media(p)}`),
+        h('div', { class: 'suave' }, Object.entries(opcoes.dimensoes_csat).map(([c, r]) => `${r}: ${p[c]}`).join(' · '))]),
+      h('td', {}, p.comentario ? h('div', { class: 'comentario' }, p.comentario) : h('span', { class: 'suave' }, '—')),
+      h('td', {}, ehGestor() ? h('button', { class: 'secundario', onclick: () => excluirPesquisa(p) }, 'Excluir') : null))))));
+}
+
+function tabelaAguardando(lista, { mostrarCliente = true } = {}) {
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Criada', mostrarCliente ? 'Cliente' : null, 'Perguntas', 'Validade', ''].filter((t) => t !== null).map((t) => h('th', {}, t)))),
+    h('tbody', {}, lista.map((p) => h('tr', {},
+      h('td', {}, dataHora(p.criado_em), p.criado_por_nome ? h('div', { class: 'suave' }, p.criado_por_nome) : null),
+      mostrarCliente ? h('td', {}, h('a', { href: `#/empresa/${p.empresa_id}` }, p.empresa_nome)) : null,
+      h('td', {}, opcoes.tipos_pesquisa[p.tipo]),
+      h('td', {}, p.expirada ? etiquetaCor('Link expirado', 'var(--cancelada)') : `até ${data(p.expira_em)}`),
+      h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
+        p.expirada ? null : botoesEnvio(p),
+        h('button', { class: 'secundario', onclick: () => excluirPesquisa(p) }, p.expirada ? 'Remover' : 'Cancelar link'))))))));
+}
+
+async function telaPesquisas(query) {
+  const filtros = new URLSearchParams(query);
+  const r = await api(`/api/pesquisas?${filtros}`);
+  const s = r.resumo;
+  const indicador = (numero, rotulo, detalhe, cor) => h('div', { class: 'indicador', style: { '--cor': cor, cursor: 'default' } },
+    h('div', { class: 'rotulo' }, rotulo), h('div', { class: 'numero' }, numero), detalhe ? h('div', { class: 'suave' }, detalhe) : null);
+  const totalNps = s.promotores + s.neutros + s.detratores;
+  const fatia = (n, cor, rotulo) => (n ? h('span', { style: { width: `${(n / totalNps) * 100}%`, background: cor }, title: `${rotulo}: ${n}` }) : null);
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, 'Pesquisas de satisfação'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'secundario', onclick: abrirPesquisaLote }, 'Para todos os clientes'),
+        h('button', { class: 'destaque', onclick: () => abrirNovaPesquisa() }, '+ Nova pesquisa'))),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('pesquisas', dadosFormulario(ev.target)); },
+    },
+    campo('Respostas de', { type: 'date', name: 'inicio', valor: r.inicio }),
+    campo('Até', { type: 'date', name: 'fim', valor: r.fim }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Atualizar')),
+    h('div', { class: 'indicadores' },
+      indicador(s.nps == null ? '—' : s.nps, 'NPS do período', 'de −100 a 100 · acima de 50 é muito bom',
+        s.nps == null ? 'var(--cancelada)' : s.nps >= 50 ? 'var(--emitida)' : s.nps >= 0 ? 'var(--pendente)' : 'var(--rejeitada)'),
+      indicador(s.respostas, 'Respostas', s.taxa_resposta == null ? null : `${s.taxa_resposta}% dos links criados no período`, 'var(--azul)'),
+      indicador(s.promotores, 'Promotores (9–10)', `${s.neutros} neutro(s) · ${s.detratores} detrator(es)`, 'var(--emitida)'),
+      indicador(r.aguardando.filter((p) => !p.expirada).length, 'Aguardando resposta', null, 'var(--azul-claro)')),
+    h('div', { class: 'colunas-iguais' },
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Distribuição do NPS'),
+        totalNps
+          ? [h('div', { class: 'barra-nps' },
+            fatia(s.detratores, 'var(--rejeitada)', 'Detratores'), fatia(s.neutros, 'var(--pendente)', 'Neutros'), fatia(s.promotores, 'var(--emitida)', 'Promotores')),
+          h('div', { class: 'legenda-grafico', style: { marginTop: '8px' } },
+            [['Detratores (0–6)', 'var(--rejeitada)', s.detratores], ['Neutros (7–8)', 'var(--pendente)', s.neutros], ['Promotores (9–10)', 'var(--emitida)', s.promotores]]
+              .map(([t, cor, n]) => h('span', {}, h('i', { style: { background: cor } }), `${t}: ${n}`)))]
+          : h('p', { class: 'suave' }, 'Nenhuma nota de NPS no período.')),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Satisfação por aspecto (média de 1 a 5)'),
+        h('table', { class: 'manter' }, h('tbody', {}, Object.entries(opcoes.dimensoes_csat).map(([campoCsat, rotulo]) => h('tr', {},
+          h('td', {}, rotulo, h('div', { class: 'barra' }, h('span', { style: { width: `${((s.csat[campoCsat] ?? 0) / 5) * 100}%` } }))),
+          h('td', { class: 'num' }, h('strong', {}, s.csat[campoCsat] == null ? '—' : String(s.csat[campoCsat]).replace('.', ','))))))))),
+    h('h2', {}, `Aguardando resposta (${r.aguardando.length})`),
+    r.aguardando.length
+      ? h('div', { style: { marginBottom: '20px' } }, tabelaAguardando(r.aguardando))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum link aguardando resposta.'),
+    h('h2', {}, `Respostas do período (${r.respostas.length})`),
+    r.respostas.length ? tabelaRespostas(r.respostas) : h('div', { class: 'cartao vazio' }, 'Nenhuma resposta no período.'));
+}
+
+// Página pública: o cliente abre o link e responde sem login.
+async function telaPesquisaPublica(token) {
+  document.getElementById('topo').hidden = true;
+  document.body.classList.add('tela-login');
+  document.body.classList.remove('com-lateral');
+  const moldura = (...conteudoCartao) => renderizar(h('div', { class: 'pagina-login' }, h('div', { class: 'cartao login pesquisa-publica' },
+    h('img', { class: 'logo-login', src: '/marca/logo.webp', alt: 'ContabilizaTech — a sua contabilidade digital.' }),
+    h('div', { class: 'faixa-marca' }),
+    ...conteudoCartao)));
+  let p;
+  try {
+    p = await api(`/api/pesquisa-publica/${token}`);
+  } catch (err) {
+    return moldura(h('h1', {}, 'Link inválido'), h('p', {}, err.message));
+  }
+  if (p.respondida) return moldura(h('h1', {}, 'Obrigado!'), h('p', {}, 'Esta pesquisa já foi respondida. Sua opinião ajuda a melhorar o nosso atendimento.'));
+  if (p.expirada) return moldura(h('h1', {}, 'Link expirado'), h('p', {}, 'Este link de pesquisa expirou. Se quiser avaliar o atendimento, peça um novo ao escritório.'));
+
+  const escala = (nome, de, ate, rotulos = {}) => h('div', { class: `escala${ate - de === 10 ? ' onze' : ''}`, role: 'radiogroup' },
+    Array.from({ length: ate - de + 1 }, (_, i) => de + i).map((n) => h('label', { class: 'nota', title: rotulos[n] ?? null },
+      h('input', { type: 'radio', name: nome, value: n, required: true }), h('span', {}, n))));
+
+  moldura(
+    h('h1', {}, 'Como está o nosso atendimento?'),
+    h('p', { class: 'suave' }, `Pesquisa rápida para ${p.empresa_nome}. Leva menos de 1 minuto.`),
+    h('form', {
+      onsubmit: aoEnviar(async (dados) => {
+        await api(`/api/pesquisa-publica/${token}`, { metodo: 'POST', dados });
+        moldura(h('h1', {}, 'Obrigado!'), h('p', {}, 'Recebemos a sua avaliação. Ela ajuda a ContabilizaTech a melhorar sempre.'));
+      }),
+    },
+    p.pede_nps ? h('fieldset', {},
+      h('legend', {}, 'De 0 a 10, quanto você recomendaria a ContabilizaTech a um amigo ou empresa parceira?'),
+      escala('nps', 0, 10),
+      h('div', { class: 'extremos' }, h('span', {}, 'Nada provável'), h('span', {}, 'Muito provável'))) : null,
+    Object.entries(p.dimensoes).map(([nome, rotulo]) => h('fieldset', {},
+      h('legend', {}, `${rotulo}: de 1 (muito ruim) a 5 (excelente)`),
+      escala(nome, 1, 5, { 1: 'Muito ruim', 2: 'Ruim', 3: 'Regular', 4: 'Bom', 5: 'Excelente' }))),
+    h('div', { class: 'grade' }, campo('Quer comentar algo? (opcional)', { tag: 'textarea', name: 'comentario', maxlength: 2000 }, { inteira: true })),
+    h('div', { class: 'acoes' }, h('button', { type: 'submit', class: 'destaque', style: { width: '100%' } }, 'Enviar avaliação'))));
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard (visão geral do escritório)
+// ---------------------------------------------------------------------------
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// Igual a h(), para elementos SVG (gráficos e ícones).
+function svg(tag, atributos = {}, ...filhos) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [chave, valor] of Object.entries(atributos)) if (valor != null && valor !== false) el.setAttribute(chave, valor);
+  for (const filho of filhos.flat(Infinity)) {
+    if (filho == null || filho === false) continue;
+    el.append(filho instanceof Node ? filho : document.createTextNode(String(filho)));
+  }
+  return el;
+}
+
+const mesAbreviado = (m) => new Date(`${m}-15T12:00:00`).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '');
+
+// Colunas por mês (uma ou mais séries lado a lado), com o valor sobre cada coluna, dica ao
+// passar o mouse e a tabela com os números logo abaixo.
+// Com eixo: linhas de grade com os valores à esquerda, sem rótulo em cada coluna (para valores
+// longos, como reais, que se sobreporiam). largura: a do espaço que o gráfico ocupa na tela.
+function graficoColunas({ meses, series, formatar = String, formatarCompleto = formatar, largura = 520, eixo = false }) {
+  const altura = 200;
+  const topo = 20;
+  const base = 24;
+  // No celular o texto do gráfico é maior (ver styles.css), então o eixo pede mais espaço.
+  const esquerda = eixo ? (largura < 700 ? 120 : 70) : 0;
+  const util = altura - topo - base;
+  const maior = Math.max(1, ...series.flatMap((x) => x.valores));
+  // No eixo, o topo é um múltiplo redondo de 2 × potência de 10, para a metade também ser redonda.
+  const potencia = 10 ** Math.floor(Math.log10(maior));
+  const maximo = eixo ? Math.ceil(maior / (potencia * 2)) * potencia * 2 : maior;
+  const grupo = (largura - esquerda) / meses.length;
+  const vao = 2;
+  const barra = Math.min(30, (grupo * 0.62 - vao * (series.length - 1)) / series.length);
+  const larguraGrupo = barra * series.length + vao * (series.length - 1);
+
+  const colunas = meses.flatMap((m, i) => series.map((serie, j) => {
+    const valor = serie.valores[i];
+    const x = esquerda + i * grupo + (grupo - larguraGrupo) / 2 + j * (barra + vao);
+    const alturaBarra = (valor / maximo) * util;
+    const y = altura - base - alturaBarra;
+    const r = Math.min(4, alturaBarra, barra / 2);
+    const fundo = altura - base;
+    return svg('g', { class: 'coluna' },
+      svg('title', {}, `${serie.nome} · ${nomeDoMes(m)}: ${formatarCompleto(valor)}`),
+      // Área de toque maior que a coluna, para a dica aparecer mesmo em colunas baixas.
+      svg('rect', { x: x - vao, y: topo, width: barra + vao * 2, height: util, fill: 'transparent' }),
+      valor > 0 ? svg('path', {
+        d: `M${x},${fundo} V${y + r} Q${x},${y} ${x + r},${y} H${x + barra - r} Q${x + barra},${y} ${x + barra},${y + r} V${fundo} Z`,
+        fill: serie.cor,
+      }) : null,
+      valor > 0 && !eixo ? svg('text', { x: x + barra / 2, y: y - 6, 'text-anchor': 'middle', class: 'valor' }, formatar(valor)) : null);
+  }));
+
+  return h('div', { class: 'grafico' },
+    series.length > 1
+      ? h('div', { class: 'legenda-grafico' }, series.map((serie) => h('span', {}, h('i', { style: { background: serie.cor } }), serie.nome)))
+      : null,
+    svg('svg', { viewBox: `0 0 ${largura} ${altura}`, role: 'img', 'aria-label': series.map((x) => x.nome).join(' e ') },
+      eixo ? [0.5, 1].map((f) => {
+        const y = altura - base - f * util;
+        return [svg('line', { x1: esquerda, x2: largura, y1: y, y2: y, class: 'grade' }),
+          svg('text', { x: esquerda - 8, y: y + 4, 'text-anchor': 'end', class: 'mes' }, formatar(maximo * f))];
+      }) : null,
+      svg('line', { x1: esquerda, x2: largura, y1: altura - base, y2: altura - base, class: 'eixo' }),
+      colunas,
+      meses.map((m, i) => svg('text', { x: esquerda + i * grupo + grupo / 2, y: altura - 6, 'text-anchor': 'middle', class: 'mes' }, mesAbreviado(m)))),
+    h('details', { class: 'ver-numeros' }, h('summary', {}, 'Ver os números'),
+      h('table', { class: 'manter' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Mês'), series.map((x) => h('th', { class: 'num' }, x.nome)))),
+        h('tbody', {}, meses.map((m, i) => h('tr', {}, h('td', {}, nomeDoMes(m)), series.map((x) => h('td', { class: 'num' }, formatarCompleto(x.valores[i])))))))));
+}
+
+async function telaDashboard(query) {
+  const filtros = new URLSearchParams(query);
+  const mes = filtros.get('mes') || hoje().slice(0, 7);
+  const p = await api(`/api/painel?mes=${mes}`);
+  const [ano, numMes] = mes.split('-').map(Number);
+  const periodo = `inicio=${mes}-01&fim=${mes}-${String(new Date(ano, numMes, 0).getDate()).padStart(2, '0')}`;
+
+  const indicador = (numero, rotulo, detalhe, cor, href) => h('div', {
+    class: 'indicador', style: { '--cor': cor, cursor: href ? 'pointer' : 'default' }, onclick: href ? () => { location.hash = href; } : null,
+  }, h('div', { class: 'rotulo' }, rotulo), h('div', { class: 'numero' }, numero), detalhe ? h('div', { class: 'suave' }, detalhe) : null);
+
+  const maiorRegime = Math.max(1, ...p.clientes.por_regime.map((r) => r.quantidade));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('div', {}, h('h1', {}, 'Visão geral'), h('div', { class: 'suave' }, `Indicadores de ${nomeDoMes(mes)}`)),
+      h('form', {
+        class: 'filtros', style: { marginBottom: 0 },
+        onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('', dadosFormulario(ev.target)); },
+        onchange: (ev) => ev.currentTarget.requestSubmit(),
+      }, campo('Mês', { type: 'month', name: 'mes', valor: mes }))),
+    h('div', { class: 'acoes-rapidas' },
+      h('button', { class: 'acao-rapida destaque', onclick: () => abrirFormularioDemanda() },
+        h('strong', {}, 'Nova demanda'), h('span', {}, 'Com prazo e responsável')),
+      h('button', { class: 'acao-rapida', onclick: () => abrirFormularioVencimento() },
+        h('strong', {}, 'Novo vencimento'), h('span', {}, 'Guia a pagar do cliente')),
+      h('button', { class: 'acao-rapida roxo', onclick: () => abrirDialogoNota() },
+        h('strong', {}, 'Registrar nota'), h('span', {}, 'Com XML, os dados são lidos sozinhos')),
+      h('button', { class: 'acao-rapida escuro', onclick: () => abrirDialogoOcorrencia('multa') },
+        h('strong', {}, 'Multa'), h('span', {}, 'Com a guia e o motivo'))),
+    h('div', { class: 'indicadores seis' },
+      indicador(p.demandas.abertas, 'Demandas em aberto',
+        `${p.demandas.atrasadas} com prazo vencido · ${p.demandas.minhas} com você`, 'var(--rosa)', '#/demandas'),
+      indicador(p.vencimentos.vencidos, 'Vencimentos vencidos',
+        `${p.vencimentos.proximos_7_dias} vencem nos próximos 7 dias`, 'var(--rejeitada)', '#/vencimentos?mes=&situacao=vencido'),
+      indicador(p.vencimentos.pendentes_no_mes, 'Vencimentos do mês a pagar',
+        `${p.vencimentos.pagos_no_mes} já pago(s)`, 'var(--roxo)', `#/vencimentos?mes=${mes}`),
+      indicador(p.clientes.ativos, 'Clientes ativos',
+        `${p.clientes.novos_no_mes} novo(s) no mês · ${p.clientes.inativos} inativo(s)`, 'var(--azul)', '#/empresas'),
+      p.financeiro
+        ? indicador(moeda(p.financeiro.recebido_no_mes_centavos), 'Honorários recebidos no mês',
+          `de ${moeda(p.financeiro.faturado_no_mes_centavos)} faturado · ${moeda(p.financeiro.atrasado_centavos)} em atraso`, 'var(--rosa)', `#/receita?mes=${mes}`)
+        : indicador(moeda(p.honorarios.base_mensal_centavos), 'Honorários mensais (base)',
+          `Ticket médio ${moeda(p.honorarios.ticket_medio_centavos)}`, 'var(--rosa)', null),
+      indicador(p.operacao.notas_emitidas, 'Notas emitidas no mês',
+        `${p.operacao.notas_abertas} pedido(s) em aberto`, 'var(--azul-claro)', `#/notas?mes=${mes}`),
+      indicador(p.operacao.guias, 'Guias recalculadas no mês', null, 'var(--roxo)', `#/ocorrencias?tipo=guia_recalculada&${periodo}`),
+      indicador(p.operacao.multas, 'Multas no mês',
+        `${moeda(p.operacao.multas_valor_centavos)} · ${p.operacao.multas_escritorio} por causa do escritório · ${p.operacao.multas_pendentes} pendente(s) no total`, 'var(--preto)',
+        `#/ocorrencias?tipo=multa&${periodo}`),
+      indicador(p.satisfacao.nps == null ? '—' : p.satisfacao.nps, 'NPS dos últimos 90 dias',
+        `${p.satisfacao.respostas} resposta(s) · ${p.satisfacao.aguardando} aguardando`, 'var(--emitida)', '#/pesquisas')),
+    h('div', { class: 'colunas-iguais' },
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Notas emitidas nos últimos 6 meses'),
+        graficoColunas({ meses: p.meses, series: [{ nome: 'Notas emitidas', cor: 'var(--azul)', valores: p.serie.map((x) => x.notas) }] })),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Guias recalculadas e multas'),
+        graficoColunas({
+          meses: p.meses,
+          series: [
+            { nome: 'Guias recalculadas', cor: 'var(--roxo)', valores: p.serie.map((x) => x.guias) },
+            { nome: 'Multas', cor: 'var(--rosa)', valores: p.serie.map((x) => x.multas) },
+          ],
+        }))),
+    h('div', { class: 'colunas-iguais' },
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Clientes ativos por regime'),
+        p.clientes.por_regime.length
+          ? h('div', { class: 'rolagem-x' }, h('table', { class: 'manter' },
+            h('thead', {}, h('tr', {}, h('th', {}, 'Regime'), h('th', { class: 'num' }, 'Clientes'), h('th', { class: 'num' }, 'Honorários/mês'))),
+            h('tbody', {}, p.clientes.por_regime.map((r) => h('tr', {},
+              h('td', {}, r.rotulo, h('div', { class: 'barra' }, h('span', { style: { width: `${Math.round((r.quantidade / maiorRegime) * 100)}%` } }))),
+              h('td', { class: 'num' }, h('strong', {}, r.quantidade)),
+              h('td', { class: 'num' }, moeda(r.honorarios_centavos)))))))
+          : h('p', { class: 'suave' }, 'Nenhum cliente ativo cadastrado.')),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Pendências'),
+        p.alertas.length
+          ? h('ul', { class: 'pendencias' }, p.alertas.map((a) => h('li', {},
+            h('a', { href: a.link }, h('strong', {}, a.quantidade), ` ${a.texto}`))))
+          : h('p', { class: 'suave' }, 'Nada pendente. Cadastros completos e nenhum pedido de nota em aberto.'))));
+}
+
 async function carregarUsuario() {
   try {
     usuario = await api('/api/me');
@@ -1754,30 +3054,76 @@ async function carregarUsuario() {
   }
 }
 
+// Ícones do menu (traço simples, 24×24).
+const ICONES = {
+  inicio: [['rect', { x: 3, y: 3, width: 7, height: 9, rx: 1.5 }], ['rect', { x: 14, y: 3, width: 7, height: 5, rx: 1.5 }],
+    ['rect', { x: 14, y: 12, width: 7, height: 9, rx: 1.5 }], ['rect', { x: 3, y: 16, width: 7, height: 5, rx: 1.5 }]],
+  painel: [['polyline', { points: '22 12 18 12 15 21 9 3 6 12 2 12' }]],
+  nota: [['path', { d: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' }], ['polyline', { points: '14 2 14 8 20 8' }],
+    ['line', { x1: 8, y1: 13, x2: 16, y2: 13 }], ['line', { x1: 8, y1: 17, x2: 13, y2: 17 }]],
+  alerta: [['path', { d: 'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z' }],
+    ['line', { x1: 12, y1: 9, x2: 12, y2: 13 }], ['line', { x1: 12, y1: 17, x2: 12.01, y2: 17 }]],
+  grafico: [['line', { x1: 18, y1: 20, x2: 18, y2: 10 }], ['line', { x1: 12, y1: 20, x2: 12, y2: 4 }], ['line', { x1: 6, y1: 20, x2: 6, y2: 14 }]],
+  clientes: [['rect', { x: 2, y: 7, width: 20, height: 14, rx: 2 }], ['path', { d: 'M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16' }]],
+  usuarios: [['path', { d: 'M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2' }], ['circle', { cx: 9, cy: 7, r: 4 }],
+    ['path', { d: 'M23 21v-2a4 4 0 0 0-3-3.87' }], ['path', { d: 'M16 3.13a4 4 0 0 1 0 7.75' }]],
+  documentos: [['polyline', { points: '22 12 16 12 14 15 10 15 8 12 2 12' }],
+    ['path', { d: 'M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z' }]],
+  demandas: [['path', { d: 'M9 11l3 3L22 4' }], ['path', { d: 'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' }]],
+  calendario: [['rect', { x: 3, y: 4, width: 18, height: 18, rx: 2 }], ['line', { x1: 16, y1: 2, x2: 16, y2: 6 }],
+    ['line', { x1: 8, y1: 2, x2: 8, y2: 6 }], ['line', { x1: 3, y1: 10, x2: 21, y2: 10 }]],
+  dinheiro: [['line', { x1: 12, y1: 1, x2: 12, y2: 23 }], ['path', { d: 'M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' }]],
+  tendencia: [['polyline', { points: '23 6 13.5 15.5 8.5 10.5 1 18' }], ['polyline', { points: '17 6 23 6 23 12' }]],
+  estrela: [['polygon', { points: '12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2' }]],
+  nova: [['circle', { cx: 12, cy: 12, r: 10 }], ['line', { x1: 12, y1: 8, x2: 12, y2: 16 }], ['line', { x1: 8, y1: 12, x2: 16, y2: 12 }]],
+};
+
+const icone = (nome) => svg('svg', { viewBox: '0 0 24 24', class: 'icone', 'aria-hidden': 'true' },
+  ICONES[nome].map(([tag, atributos]) => svg(tag, atributos)));
+
+// Menu lateral agrupado por seção; cada item: [href, texto, ícone].
+function itensDoMenu() {
+  if (usuario.papel === 'escritorio') {
+    return [
+      ['Visão geral', [['#/', 'Dashboard', 'inicio'], ['#/painel-notas', 'Painel de notas', 'painel']]],
+      ['Operação', [['#/demandas', 'Demandas', 'demandas'], ['#/vencimentos', 'Vencimentos', 'calendario'], ['#/notas', 'Notas', 'nota'],
+        ['#/ocorrencias', 'Guias e multas', 'alerta'], ['#/pesquisas', 'Pesquisas', 'estrela'], ['#/relatorio', 'Relatório', 'grafico']]],
+      ehGestor() ? ['Financeiro', [['#/honorarios', 'Honorários', 'dinheiro'], ['#/receita', 'Receita', 'tendencia']]] : null,
+      ['Cadastros', [['#/empresas', 'Clientes', 'clientes'], ['#/usuarios', 'Usuários', 'usuarios']]],
+      ['Integrações', [['#/zen', 'Questor Zen', 'documentos']]],
+    ];
+  }
+  return [[null, opcoes.acesso_clientes
+    ? [['#/', 'Minhas solicitações', 'nota'], ['#/nova', 'Nova solicitação', 'nova'], ['#/documentos', 'Meus documentos', 'documentos']]
+    : [['#/', 'Meus documentos', 'documentos']]]];
+}
+
 function montarMenu(caminho) {
-  const itens = usuario.papel === 'escritorio'
-    ? [['#/', 'Painel'], ['#/notas', 'Notas'], ['#/ocorrencias', 'Ocorrências'], ['#/relatorio', 'Relatório'],
-      ['#/empresas', 'Empresas'], ['#/usuarios', 'Usuários'], ['#/zen', 'Questor Zen']]
-    : opcoes.acesso_clientes
-      ? [['#/', 'Minhas solicitações'], ['#/nova', 'Nova solicitação'], ['#/documentos', 'Meus documentos']]
-      : [['#/', 'Meus documentos']];
   const ativo = (href) => {
     if (href === '#/') return caminho === '/' || (usuario.papel !== 'escritorio' && caminho.startsWith('/solicitacao'));
     if (href === '#/notas') return caminho === '/notas' || caminho.startsWith('/solicitacao');
     if (href === '#/empresas') return caminho === '/empresas' || caminho.startsWith('/empresa/');
+    if (href === '#/demandas') return caminho === '/demandas' || caminho.startsWith('/demanda/');
     return `#${caminho}` === href;
   };
-  document.getElementById('menu').replaceChildren(...itens.map(([href, texto]) => h('a', { href, class: ativo(href) ? 'ativo' : null }, texto)));
+  document.getElementById('menu').replaceChildren(...itensDoMenu().filter(Boolean).map(([secao, itens]) => h('div', { class: 'secao-menu' },
+    secao ? h('div', { class: 'titulo-secao' }, secao) : null,
+    itens.map(([href, texto, nomeIcone]) => h('a', { href, class: ativo(href) ? 'ativo' : null }, icone(nomeIcone), texto)))));
+  document.body.classList.remove('menu-aberto');
   document.getElementById('nome-usuario').textContent = usuario.empresa
     ? `${usuario.nome} · ${usuario.empresa.razao_social}`
-    : usuario.nome;
+    : `${usuario.nome} · ${rotuloPerfil(usuario)}`;
   document.body.classList.remove('tela-login');
+  document.body.classList.add('com-lateral');
   document.getElementById('topo').hidden = false;
   document.getElementById('faixa-marca').hidden = false;
 }
 
 async function rotear() {
   const [caminho, query = ''] = location.hash.slice(1).split('?');
+  // Pesquisa de satisfação: página pública, sem login.
+  const pesquisa = caminho.match(/^\/pesquisa\/([A-Za-z0-9_-]{20,64})$/);
+  if (pesquisa) return telaPesquisaPublica(pesquisa[1]);
   if (!usuario) await carregarUsuario();
   if (!usuario) return telaLogin();
   montarMenu(caminho || '/');
@@ -1786,7 +3132,7 @@ async function rotear() {
   try {
     let m;
     if (!caminho || caminho === '/') {
-      if (escritorio) return await telaPainelMes(query);
+      if (escritorio) return await telaDashboard(query);
       return opcoes.acesso_clientes ? await telaSolicitacoesCliente(query) : await telaPortalDocumentos();
     }
     if (caminho === '/login') { location.hash = '#/'; return; }
@@ -1798,6 +3144,16 @@ async function rotear() {
     if ((m = caminho.match(/^\/solicitacao\/(\d+)\/editar$/))) return await telaFormulario(m[1]);
     if ((m = caminho.match(/^\/solicitacao\/(\d+)$/))) return await telaDetalhe(m[1]);
     if (caminho === '/notas' && escritorio) return await telaNotas(query);
+    if (caminho === '/painel-notas' && escritorio) return await telaPainelMes(query);
+    if (caminho === '/demandas' && escritorio) return await telaDemandas(query);
+    if ((m = caminho.match(/^\/demanda\/(\d+)$/)) && escritorio) return await telaDemanda(m[1]);
+    if (caminho === '/vencimentos' && escritorio) return await telaVencimentos(query);
+    if (caminho === '/pesquisas' && escritorio) return await telaPesquisas(query);
+    if (caminho === '/honorarios' && escritorio && ehGestor()) return await telaHonorarios(query);
+    if (caminho === '/receita' && escritorio && ehGestor()) return await telaReceita(query);
+    if (['/honorarios', '/receita'].includes(caminho) && escritorio) {
+      return renderizar(h('div', { class: 'cartao vazio' }, 'Honorários e receita ficam disponíveis só para gestores e administradores.'));
+    }
     if (caminho === '/empresas' && escritorio) return await telaEmpresas();
     if (caminho === '/usuarios' && escritorio) return await telaUsuarios();
     if (caminho === '/ocorrencias' && escritorio) return await telaOcorrencias(query);
@@ -1809,6 +3165,11 @@ async function rotear() {
     if (usuario) renderizar(h('div', { class: 'alerta erro' }, err.message));
   }
 }
+
+document.getElementById('abrir-menu').addEventListener('click', () => {
+  const aberto = document.body.classList.toggle('menu-aberto');
+  document.getElementById('abrir-menu').setAttribute('aria-expanded', String(aberto));
+});
 
 document.getElementById('sair').addEventListener('click', async () => {
   await api('/api/logout', { metodo: 'POST', dados: {} }).catch(() => {});

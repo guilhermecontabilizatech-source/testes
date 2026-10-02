@@ -1,6 +1,6 @@
 'use strict';
 
-const { ErroValidacao, texto, valorParaCentavos, CANAIS_PEDIDO } = require('./validacao');
+const { ErroValidacao, texto, valorParaCentavos, dataValidaISO, CANAIS_PEDIDO } = require('./validacao');
 const { paraCsv, reais } = require('./csv');
 const { transacao } = require('./db');
 const { prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
@@ -38,6 +38,13 @@ const TRIBUTOS = {
   outro: 'Outro',
 };
 
+const SITUACOES_MULTA = {
+  pendente: 'Pendente',
+  paga: 'Paga',
+  contestada: 'Contestada',
+  cancelada: 'Cancelada',
+};
+
 const CAUSAS = {
   cliente: 'Cliente',
   escritorio: 'Escritório',
@@ -52,7 +59,7 @@ const LIMITES = {
 
 const PERIODO_PADRAO = { inicio: '2026-10-01', fim: '2026-12-31' };
 
-const dataValida = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d));
+const dataValida = dataValidaISO;
 
 function validarOcorrencia(db, corpo) {
   const tipo = corpo.tipo;
@@ -75,6 +82,8 @@ function validarOcorrencia(db, corpo) {
 
   const tributo = corpo.tributo || null;
   if (tributo && !TRIBUTOS[tributo]) throw new ErroValidacao('Tributo inválido.');
+  const vencimento = tipo === 'multa' && corpo.vencimento ? String(corpo.vencimento) : null;
+  if (vencimento && !dataValida(vencimento)) throw new ErroValidacao('Vencimento da multa inválido.');
   const competencia = corpo.competencia || null;
   if (competencia && !/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) throw new ErroValidacao('Competência inválida (use AAAA-MM).');
 
@@ -96,11 +105,12 @@ function validarOcorrencia(db, corpo) {
     causa_outro: outro('causa_outro', corpo.causa, 'Causa: outro'),
     valor_centavos: valor,
     descricao: texto('Descrição', corpo.descricao, { max: 500 }),
+    vencimento,
   };
 }
 
 const CAMPOS_OCORRENCIA = ['empresa_id', 'tipo', 'tributo', 'tributo_outro', 'competencia', 'data', 'motivo', 'motivo_outro',
-  'causa', 'causa_outro', 'valor_centavos', 'descricao'];
+  'causa', 'causa_outro', 'valor_centavos', 'descricao', 'vencimento'];
 
 const normalizarTexto = (t) => String(t ?? '').trim().toLowerCase();
 
@@ -289,7 +299,9 @@ function relatorioCsv(rel) {
 function registrarRotasOperacionais({ rota, db, pastaArquivos }) {
   const soEscritorio = { papel: 'escritorio' };
 
-  rota('GET', '/api/ocorrencias/opcoes', () => ({ tipos: TIPOS_OCORRENCIA, motivos: MOTIVOS, causas: CAUSAS, tributos: TRIBUTOS, canais: CANAIS_PEDIDO }), soEscritorio);
+  rota('GET', '/api/ocorrencias/opcoes', () => ({
+    tipos: TIPOS_OCORRENCIA, motivos: MOTIVOS, causas: CAUSAS, tributos: TRIBUTOS, canais: CANAIS_PEDIDO, situacoes_multa: SITUACOES_MULTA,
+  }), soEscritorio);
 
   function anexosDasOcorrencias(ids) {
     const porOcorrencia = new Map(ids.map((id) => [id, []]));
@@ -316,6 +328,11 @@ function registrarRotasOperacionais({ rota, db, pastaArquivos }) {
     if (query.get('empresa_id')) { condicoes.push('o.empresa_id = ?'); params.push(Number(query.get('empresa_id'))); }
     if (query.get('tipo')) { condicoes.push('o.tipo = ?'); params.push(query.get('tipo')); }
     if (query.get('causa')) { condicoes.push('o.causa = ?'); params.push(query.get('causa')); }
+    if (query.get('situacao')) {
+      if (!SITUACOES_MULTA[query.get('situacao')]) throw new ErroValidacao('Situação inválida.');
+      condicoes.push("o.tipo = 'multa' AND o.situacao = ?");
+      params.push(query.get('situacao'));
+    }
     if (dataValida(query.get('inicio') ?? '')) { condicoes.push('o.data >= ?'); params.push(query.get('inicio')); }
     if (dataValida(query.get('fim') ?? '')) { condicoes.push('o.data <= ?'); params.push(query.get('fim')); }
     const where = condicoes.length ? `WHERE ${condicoes.join(' AND ')}` : '';
@@ -336,9 +353,9 @@ function registrarRotasOperacionais({ rota, db, pastaArquivos }) {
     try {
       const id = transacao(db, () => {
         const r = db.prepare(`
-          INSERT INTO ocorrencias (${CAMPOS_OCORRENCIA.join(', ')}, registrado_por)
-          VALUES (${CAMPOS_OCORRENCIA.map(() => '?').join(', ')}, ?)
-        `).run(...CAMPOS_OCORRENCIA.map((c) => o[c]), usuario.id);
+          INSERT INTO ocorrencias (${CAMPOS_OCORRENCIA.join(', ')}, registrado_por, situacao)
+          VALUES (${CAMPOS_OCORRENCIA.map(() => '?').join(', ')}, ?, ?)
+        `).run(...CAMPOS_OCORRENCIA.map((c) => o[c]), usuario.id, o.tipo === 'multa' ? 'pendente' : null);
         const novoId = Number(r.lastInsertRowid);
         inserirAnexos(novoId, gravados, usuario.id);
         return novoId;
@@ -348,6 +365,23 @@ function registrarRotasOperacionais({ rota, db, pastaArquivos }) {
       desfazer();
       throw err;
     }
+  }, soEscritorio);
+
+  // Situação da multa: paga (com a data), contestada (com o andamento), cancelada ou de volta a pendente.
+  rota('POST', '/api/ocorrencias/:id/situacao', ({ corpo, params }) => {
+    const o = db.prepare('SELECT id, tipo FROM ocorrencias WHERE id = ?').get(params.id);
+    if (!o) throw new ErroValidacao('Ocorrência não encontrada.', 404);
+    if (o.tipo !== 'multa') throw new ErroValidacao('Só multas têm situação.');
+    const situacao = corpo.situacao;
+    if (!SITUACOES_MULTA[situacao]) throw new ErroValidacao('Situação inválida.');
+    let pagoEm = null;
+    if (situacao === 'paga') {
+      pagoEm = String(corpo.pago_em || '');
+      if (!dataValida(pagoEm)) throw new ErroValidacao('Informe a data do pagamento.');
+    }
+    const obs = texto('Observação', corpo.situacao_obs, { obrigatorio: situacao === 'contestada' || situacao === 'cancelada', max: 500 });
+    db.prepare('UPDATE ocorrencias SET situacao = ?, pago_em = ?, situacao_obs = ? WHERE id = ?').run(situacao, pagoEm, obs, o.id);
+    return { ok: true };
   }, soEscritorio);
 
   rota('PUT', '/api/ocorrencias/:id', ({ corpo, params }) => {
@@ -407,6 +441,7 @@ module.exports = {
   MOTIVOS,
   CAUSAS,
   TRIBUTOS,
+  SITUACOES_MULTA,
   LIMITES,
   PERIODO_PADRAO,
 };

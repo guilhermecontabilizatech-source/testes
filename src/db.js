@@ -129,6 +129,104 @@ CREATE TABLE IF NOT EXISTS zen_documentos (
 CREATE INDEX IF NOT EXISTS idx_zen_documentos_empresa ON zen_documentos(empresa_id);
 CREATE INDEX IF NOT EXISTS idx_zen_documentos_zen_id ON zen_documentos(zen_id);
 
+-- Demandas do dia a dia de cada cliente (pedidos, declarações, certidões...), com histórico.
+CREATE TABLE IF NOT EXISTS demandas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  titulo TEXT NOT NULL,
+  tipo TEXT NOT NULL,
+  tipo_outro TEXT,
+  descricao TEXT,
+  prioridade TEXT NOT NULL DEFAULT 'media' CHECK (prioridade IN ('baixa', 'media', 'alta', 'urgente')),
+  status TEXT NOT NULL DEFAULT 'aberta'
+    CHECK (status IN ('aberta', 'em_andamento', 'aguardando_cliente', 'concluida', 'cancelada')),
+  responsavel_id INTEGER REFERENCES usuarios(id),
+  criado_por INTEGER REFERENCES usuarios(id),
+  prazo TEXT,
+  canal TEXT,
+  canal_outro TEXT,
+  concluida_em TEXT,
+  criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+  atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_demandas_empresa ON demandas(empresa_id);
+CREATE INDEX IF NOT EXISTS idx_demandas_status ON demandas(status);
+
+CREATE TABLE IF NOT EXISTS demanda_historico (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  demanda_id INTEGER NOT NULL REFERENCES demandas(id) ON DELETE CASCADE,
+  usuario_id INTEGER REFERENCES usuarios(id),
+  acao TEXT NOT NULL,
+  mensagem TEXT,
+  criado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_demanda_historico ON demanda_historico(demanda_id);
+
+-- Vencimentos: guias e obrigações de cada cliente, do envio ao pagamento.
+CREATE TABLE IF NOT EXISTS vencimentos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  tributo TEXT NOT NULL,
+  tributo_outro TEXT,
+  descricao TEXT,
+  competencia TEXT,
+  vencimento TEXT NOT NULL,
+  valor_centavos INTEGER CHECK (valor_centavos IS NULL OR valor_centavos >= 0),
+  status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'pago', 'cancelado')),
+  enviada_em TEXT,
+  pago_em TEXT,
+  valor_pago_centavos INTEGER CHECK (valor_pago_centavos IS NULL OR valor_pago_centavos >= 0),
+  codigo_barras TEXT,
+  observacoes TEXT,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+  atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_vencimentos_empresa ON vencimentos(empresa_id);
+CREATE INDEX IF NOT EXISTS idx_vencimentos_data ON vencimentos(vencimento);
+
+-- Honorários: cobranças do escritório aos clientes (mensalidade, 13º e serviços extras).
+CREATE TABLE IF NOT EXISTS honorarios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  tipo TEXT NOT NULL CHECK (tipo IN ('mensal', 'decimo_terceiro', 'extra')),
+  descricao TEXT,
+  competencia TEXT NOT NULL,
+  vencimento TEXT NOT NULL,
+  valor_centavos INTEGER NOT NULL CHECK (valor_centavos > 0),
+  status TEXT NOT NULL DEFAULT 'aberto' CHECK (status IN ('aberto', 'recebido', 'cancelado')),
+  recebido_em TEXT,
+  valor_recebido_centavos INTEGER CHECK (valor_recebido_centavos IS NULL OR valor_recebido_centavos >= 0),
+  forma_pagamento TEXT,
+  forma_outro TEXT,
+  nota_numero TEXT,
+  observacoes TEXT,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+  atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_honorarios_empresa ON honorarios(empresa_id);
+CREATE INDEX IF NOT EXISTS idx_honorarios_competencia ON honorarios(competencia);
+
+-- Pesquisas de satisfação: um link público por envio (token aleatório) e uma resposta por link.
+CREATE TABLE IF NOT EXISTS pesquisas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  token TEXT NOT NULL UNIQUE,
+  tipo TEXT NOT NULL CHECK (tipo IN ('nps', 'csat', 'completa')),
+  expira_em TEXT NOT NULL,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+  respondida_em TEXT,
+  nps INTEGER CHECK (nps IS NULL OR nps BETWEEN 0 AND 10),
+  csat_atendimento INTEGER CHECK (csat_atendimento IS NULL OR csat_atendimento BETWEEN 1 AND 5),
+  csat_prazo INTEGER CHECK (csat_prazo IS NULL OR csat_prazo BETWEEN 1 AND 5),
+  csat_qualidade INTEGER CHECK (csat_qualidade IS NULL OR csat_qualidade BETWEEN 1 AND 5),
+  csat_comunicacao INTEGER CHECK (csat_comunicacao IS NULL OR csat_comunicacao BETWEEN 1 AND 5),
+  comentario TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pesquisas_empresa ON pesquisas(empresa_id);
+
 CREATE TABLE IF NOT EXISTS anexos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   solicitacao_id INTEGER NOT NULL REFERENCES solicitacoes(id) ON DELETE CASCADE,
@@ -149,9 +247,19 @@ const COLUNAS_NOVAS = {
     notas_incluidas: 'INTEGER',
     honorario_centavos: 'INTEGER',
     responsavel_id: 'INTEGER REFERENCES usuarios(id)',
+    nome_fantasia: 'TEXT',
+    regime: 'TEXT',
+    regime_outro: 'TEXT',
+    endereco: 'TEXT',
+    cidade: 'TEXT',
+    uf: 'TEXT',
+    data_contrato: 'TEXT',
+    observacoes: 'TEXT',
+    dia_vencimento: 'INTEGER',
   },
   usuarios: {
     admin: 'INTEGER NOT NULL DEFAULT 0',
+    gestor: 'INTEGER NOT NULL DEFAULT 0',
   },
   ocorrencias: {
     tributo: 'TEXT',
@@ -159,6 +267,11 @@ const COLUNAS_NOVAS = {
     motivo_outro: 'TEXT',
     causa_outro: 'TEXT',
     tributo_outro: 'TEXT',
+    // Só multas: pendente, paga, contestada ou cancelada, com vencimento e data do pagamento.
+    situacao: 'TEXT',
+    vencimento: 'TEXT',
+    pago_em: 'TEXT',
+    situacao_obs: 'TEXT',
   },
 };
 
@@ -195,6 +308,8 @@ function migrar(db) {
       if (!existentes.has(coluna)) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`);
     }
   }
+  // Multas registradas antes da situação existir começam como pendentes.
+  db.exec("UPDATE ocorrencias SET situacao = 'pendente' WHERE tipo = 'multa' AND situacao IS NULL");
   // Sempre há um administrador: se nenhum estiver marcado, o primeiro usuário da equipe passa a ser.
   if (!db.prepare("SELECT 1 FROM usuarios WHERE admin = 1 AND papel = 'escritorio' AND ativo = 1").get()) {
     db.prepare(`UPDATE usuarios SET admin = 1 WHERE id = (
