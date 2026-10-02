@@ -259,6 +259,7 @@ table.relatorio td { font-size: 14px; }
 .rolagem-x { overflow-x: auto; }
 .grafico svg { width: 100%; height: auto; display: block; overflow: visible; }
 .grafico .eixo { stroke: var(--borda); stroke-width: 1; }
+.grafico .grade { stroke: var(--borda); stroke-width: 1; stroke-dasharray: 3 4; }
 .grafico text { font-family: "Inter", system-ui, sans-serif; font-size: 11px; fill: var(--suave); }
 .grafico text.valor { fill: var(--preto); font-weight: 600; }
 .grafico .coluna:hover path { opacity: .82; }

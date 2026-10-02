@@ -12,7 +12,7 @@ function mesesAte(mes, quantidade) {
 }
 
 // Indicadores do dashboard (visão geral do escritório num mês).
-function calcularPainel(db, mes, { hoje, usuarioId = null }) {
+function calcularPainel(db, mes, { hoje, usuarioId = null, gestor = false }) {
   const meses = mesesAte(mes, 6);
   const umValor = (sql, ...params) => db.prepare(sql).get(...params).n ?? 0;
 
@@ -99,9 +99,23 @@ function calcularPainel(db, mes, { hoje, usuarioId = null }) {
     pagos_no_mes: umValor("SELECT COUNT(*) AS n FROM vencimentos WHERE status = 'pago' AND substr(vencimento, 1, 7) = ?", mes),
   };
 
+  // Cobranças de honorários: só para gestores e administradores.
+  const financeiro = gestor ? {
+    recebido_no_mes_centavos: umValor(`SELECT SUM(COALESCE(valor_recebido_centavos, valor_centavos)) AS n FROM honorarios
+      WHERE status = 'recebido' AND substr(recebido_em, 1, 7) = ?`, mes),
+    faturado_no_mes_centavos: umValor("SELECT SUM(valor_centavos) AS n FROM honorarios WHERE status <> 'cancelado' AND competencia = ?", mes),
+    atrasado_centavos: umValor("SELECT SUM(valor_centavos) AS n FROM honorarios WHERE status = 'aberto' AND vencimento < ?", hoje),
+    atrasado_cobrancas: umValor("SELECT COUNT(*) AS n FROM honorarios WHERE status = 'aberto' AND vencimento < ?", hoje),
+    cobrancas_no_mes: umValor("SELECT COUNT(*) AS n FROM honorarios WHERE tipo = 'mensal' AND status <> 'cancelado' AND competencia = ?", mes),
+  } : null;
+
   // Pendências de cadastro e de operação, com o link da tela que resolve cada uma.
   const alertas = [];
   const alerta = (quantidade, texto, link) => { if (quantidade) alertas.push({ quantidade, texto, link }); };
+  if (financeiro) {
+    alerta(financeiro.atrasado_cobrancas, 'cobrança(s) de honorário em atraso', '#/honorarios?situacao=atrasado');
+    if (!financeiro.cobrancas_no_mes && clientes.ativos) alertas.push({ quantidade: '', texto: 'Honorários do mês ainda não gerados', link: `#/honorarios?competencia=${mes}` });
+  }
   alerta(vencimentos.vencidos, 'vencimento(s) vencido(s) sem pagamento confirmado', '#/vencimentos?situacao=vencido');
   alerta(vencimentos.proximos_sem_envio, 'guia(s) vencendo em até 7 dias ainda não enviada(s) ao cliente', '#/vencimentos?situacao=a_vencer');
   alerta(demandas.atrasadas, 'demanda(s) com prazo vencido', '#/demandas?status=atrasadas');
@@ -112,14 +126,14 @@ function calcularPainel(db, mes, { hoje, usuarioId = null }) {
   alerta(clientes.sem_responsavel, 'cliente(s) ativo(s) sem responsável no escritório', '#/empresas');
   alerta(zen.sem_empresa, 'documento(s) do Questor Zen sem empresa associada', '#/zen');
 
-  return { mes, meses, clientes, honorarios, operacao, zen, demandas, vencimentos, serie, alertas };
+  return { mes, meses, clientes, honorarios, financeiro, operacao, zen, demandas, vencimentos, serie, alertas };
 }
 
 function registrarRotasPainel({ rota, db, hoje }) {
   rota('GET', '/api/painel', ({ query, usuario }) => {
     const mes = query.get('mes') || hoje().slice(0, 7);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) throw new ErroValidacao('Mês inválido.');
-    return calcularPainel(db, mes, { hoje: hoje(), usuarioId: usuario.id });
+    return calcularPainel(db, mes, { hoje: hoje(), usuarioId: usuario.id, gestor: Boolean(usuario.admin || usuario.gestor) });
   }, { papel: 'escritorio' });
 }
 

@@ -29,6 +29,7 @@ A versão "controle de demandas out–dez/2026" está preservada na tag `v1-cont
 | `src/painel.js` | Indicadores do dashboard (`GET /api/painel?mes=`): clientes, honorários base, notas, guias/multas, Zen, pendências |
 | `src/demandas.js` | Demandas por cliente (tipo, prioridade, prazo, responsável), status e histórico/comentários |
 | `src/vencimentos.js` | Vencimentos (guias a pagar): envio ao cliente, pagamento, situação calculada e geração em lote por regime |
+| `src/honorarios.js` | Cobranças de honorários (mensal, 13º, extra), recebimento, geração do mês pelo dia de cada cliente e cálculo da receita (`GET /api/receita`) — só gestor/admin |
 | `src/zen.js` | Webhook do Questor Zen (`ZEN_WEBHOOK_TOKEN`) e portal do cliente (`PORTAL_CLIENTES=1`) |
 | `src/backup.js`, `scripts/` | Backup diário, redefinição de senha |
 | `public/app.js`, `styles.css` | Telas; menu lateral por seções (`itensDoMenu`), gráficos em SVG (`svg()`, `graficoColunas`); identidade visual (tokens de cor no topo do CSS) |
@@ -39,12 +40,13 @@ A versão "controle de demandas out–dez/2026" está preservada na tag `v1-cont
 Base: o protótipo Next.js "portal-contabil", refeito nesta stack. Fase 1 (feita): clientes com regime
 (`REGIMES`), CPF de autônomo, endereço, contrato e observações; menu lateral; dashboard em `#/`
 (o antigo painel do mês está em `#/painel-notas`). Fase 2 (feita): demandas, vencimentos e perfil
-Gestor. Próximas: 3) honorários e receita; 4) multas com status e pesquisas NPS/CSAT. As notas
-fiscais continuam.
+Gestor. Fase 3 (feita): honorários (cliente tem `dia_vencimento`) e receita, no menu Financeiro.
+Próxima: 4) multas com status e pesquisas NPS/CSAT. As notas fiscais continuam.
 
 Perfis da equipe (`usuarios.admin`, `usuarios.gestor`): colaborador altera as demandas que criou,
 as suas e as sem responsável; gestor altera e exclui demandas e vencimentos de todos;
-administrador faz tudo, inclusive mudar perfis e excluir empresas em lote.
+administrador faz tudo, inclusive mudar perfis e excluir empresas em lote. Honorários e receita
+só para gestor e administrador (o dashboard troca o cartão financeiro conforme o perfil).
 
 ## Convenções
 

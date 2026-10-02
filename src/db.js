@@ -185,6 +185,29 @@ CREATE TABLE IF NOT EXISTS vencimentos (
 CREATE INDEX IF NOT EXISTS idx_vencimentos_empresa ON vencimentos(empresa_id);
 CREATE INDEX IF NOT EXISTS idx_vencimentos_data ON vencimentos(vencimento);
 
+-- Honorários: cobranças do escritório aos clientes (mensalidade, 13º e serviços extras).
+CREATE TABLE IF NOT EXISTS honorarios (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  tipo TEXT NOT NULL CHECK (tipo IN ('mensal', 'decimo_terceiro', 'extra')),
+  descricao TEXT,
+  competencia TEXT NOT NULL,
+  vencimento TEXT NOT NULL,
+  valor_centavos INTEGER NOT NULL CHECK (valor_centavos > 0),
+  status TEXT NOT NULL DEFAULT 'aberto' CHECK (status IN ('aberto', 'recebido', 'cancelado')),
+  recebido_em TEXT,
+  valor_recebido_centavos INTEGER CHECK (valor_recebido_centavos IS NULL OR valor_recebido_centavos >= 0),
+  forma_pagamento TEXT,
+  forma_outro TEXT,
+  nota_numero TEXT,
+  observacoes TEXT,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+  atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_honorarios_empresa ON honorarios(empresa_id);
+CREATE INDEX IF NOT EXISTS idx_honorarios_competencia ON honorarios(competencia);
+
 CREATE TABLE IF NOT EXISTS anexos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   solicitacao_id INTEGER NOT NULL REFERENCES solicitacoes(id) ON DELETE CASCADE,
@@ -213,6 +236,7 @@ const COLUNAS_NOVAS = {
     uf: 'TEXT',
     data_contrato: 'TEXT',
     observacoes: 'TEXT',
+    dia_vencimento: 'INTEGER',
   },
   usuarios: {
     admin: 'INTEGER NOT NULL DEFAULT 0',

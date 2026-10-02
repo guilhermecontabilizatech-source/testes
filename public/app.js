@@ -29,7 +29,7 @@ const ROTULOS_HISTORICO = {
 
 let usuario = null;
 let opcoes = {
-  canais: {}, regimes: {}, ufs: [], tributos: {}, situacoes_vencimento: {}, tipos_demanda: {}, prioridades: {}, status_demanda: {}, acesso_clientes: false, portal_clientes: false, clientes_entram: false };
+  canais: {}, regimes: {}, ufs: [], tributos: {}, tipos_honorario: {}, formas_pagamento: {}, situacoes_honorario: {}, situacoes_vencimento: {}, tipos_demanda: {}, prioridades: {}, status_demanda: {}, acesso_clientes: false, portal_clientes: false, clientes_entram: false };
 const conteudo = document.getElementById('conteudo');
 
 // Cria elementos DOM de forma segura (texto nunca é interpretado como HTML).
@@ -472,6 +472,7 @@ async function abrirFormularioEmpresa(e = {}) {
     campo('Situação', { tag: 'select', name: 'ativo', valor: e.ativo === 0 ? '0' : '1', opcoes: [['1', 'Ativo'], ['0', 'Inativo']] }),
     campo('Responsável no escritório', { tag: 'select', name: 'responsavel_id', valor: e.responsavel_id ?? '', opcoes: [['', '—'], ...equipe.map((u) => [u.id, u.nome])] }),
     campo('Honorário mensal (R$)', { name: 'honorario', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(e.honorario_centavos) }),
+    campo('Dia de vencimento do honorário', { type: 'number', name: 'dia_vencimento', min: 1, max: 31, step: 1, valor: e.dia_vencimento ?? '', placeholder: 'Ex.: 10' }),
     campo('Início do contrato', { type: 'date', name: 'data_contrato', valor: e.data_contrato })),
   h('h3', {}, 'Contato e endereço'),
   h('div', { class: 'grade' },
@@ -496,7 +497,7 @@ async function abrirFormularioEmpresa(e = {}) {
 // Exclusão de empresa: mostra o que será apagado junto e, se houver registros, exige digitar EXCLUIR.
 async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
   const dep = await api(`/api/empresas/${e.id}/dependencias`);
-  const temDados = dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos;
+  const temDados = dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos || dep.honorarios;
   const dialogo = abrirDialogo(h('form', {
     onsubmit: aoEnviar(async (dados) => {
       await api(`/api/empresas/${e.id}`, { metodo: 'DELETE', dados: { confirmacao: dados.confirmacao ?? '' } });
@@ -515,6 +516,7 @@ async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
         dep.ocorrencias ? h('li', {}, `${dep.ocorrencias} guia(s) recalculada(s)/multa(s)`) : null,
         dep.demandas ? h('li', {}, `${dep.demandas} demanda(s)`) : null,
         dep.vencimentos ? h('li', {}, `${dep.vencimentos} vencimento(s)`) : null,
+        dep.honorarios ? h('li', {}, `${dep.honorarios} cobrança(s) de honorário`) : null,
         dep.arquivos ? h('li', {}, `${dep.arquivos} arquivo(s) anexado(s)`) : null,
         dep.usuarios ? h('li', {}, `${dep.usuarios} acesso(s) de cliente`) : null))
     : h('p', { class: 'suave' }, 'Esta empresa não tem notas, ocorrências, demandas nem vencimentos registrados.'),
@@ -649,6 +651,7 @@ async function abrirExclusaoLote(empresas) {
       h('li', {}, `${previa.ocorrencias} guia(s) recalculada(s)/multa(s)`),
       previa.demandas ? h('li', {}, `${previa.demandas} demanda(s)`) : null,
       previa.vencimentos ? h('li', {}, `${previa.vencimentos} vencimento(s)`) : null,
+      previa.honorarios ? h('li', {}, `${previa.honorarios} cobrança(s) de honorário`) : null,
       h('li', {}, `${previa.arquivos} arquivo(s) anexado(s)`),
       previa.usuarios ? h('li', {}, `${previa.usuarios} acesso(s) de cliente`) : null)),
   h('p', { class: 'suave' }, 'O backup da madrugada guarda os dados até ontem; o que foi lançado hoje não tem cópia.'),
@@ -1093,6 +1096,7 @@ async function telaPerfilEmpresa(id, query) {
     api(`/api/demandas?empresa_id=${id}`),
     api(`/api/vencimentos?mes=&empresa_id=${id}`),
   ]);
+  const cobrancas = ehGestor() ? (await api(`/api/honorarios?competencia=&empresa_id=${id}`)).lista.slice(-12) : null;
   // No perfil: vencimentos pendentes (inclusive vencidos) e os 5 últimos já resolvidos.
   const pendentes = vencimentos.lista.filter((v) => v.status === 'pendente');
   const resolvidos = vencimentos.lista.filter((v) => v.status !== 'pendente').slice(-5);
@@ -1142,6 +1146,12 @@ async function telaPerfilEmpresa(id, query) {
     pendentes.length || resolvidos.length
       ? h('div', { style: { marginBottom: '20px' } }, tabelaVencimentos([...resolvidos, ...pendentes], { mostrarCliente: false }))
       : h('div', { class: 'cartao vazio' }, 'Nenhum vencimento cadastrado.'),
+    cobrancas ? h('div', {},
+      h('div', { class: 'cabecalho-pagina', style: { marginBottom: '10px' } }, h('h2', { style: { margin: 0 } }, 'Honorários'),
+        h('button', { class: 'secundario', onclick: () => abrirFormularioHonorario({}, e) }, '+ Nova cobrança')),
+      cobrancas.length
+        ? h('div', { style: { marginBottom: '20px' } }, tabelaHonorarios(cobrancas, { mostrarCliente: false }))
+        : h('div', { class: 'cartao vazio' }, 'Nenhuma cobrança de honorário registrada.')) : null,
     h('h2', {}, 'Notas, guias recalculadas e multas'),
     h('form', {
       class: 'filtros',
@@ -1194,6 +1204,8 @@ function cartaoCadastro(e) {
     ['Regime tributário', rotuloRegime(e)],
     ['Situação', e.ativo ? 'Ativo' : 'Inativo'],
     ['Início do contrato', e.data_contrato ? data(e.data_contrato) : null],
+    ['Honorário', e.honorario_centavos != null
+      ? `${moeda(e.honorario_centavos)}${e.dia_vencimento ? ` · vence dia ${e.dia_vencimento}` : ''}` : null],
     ['Contato', [e.email, e.telefone].filter(Boolean).join(' · ')],
     ['Endereço', local],
   ];
@@ -2307,6 +2319,298 @@ async function telaVencimentos(query) {
 }
 
 // ---------------------------------------------------------------------------
+// Honorários e receita (gestores e administradores)
+// ---------------------------------------------------------------------------
+
+const CORES_SITUACAO_HONORARIO = { aberto: 'var(--azul)', atrasado: 'var(--rejeitada)', recebido: 'var(--emitida)', cancelado: 'var(--cancelada)' };
+const etiquetaSituacaoHonorario = (s) => etiquetaCor(opcoes.situacoes_honorario[s] ?? s, CORES_SITUACAO_HONORARIO[s]);
+const rotuloCobranca = (c) => (c.tipo === 'extra' && c.descricao ? c.descricao : opcoes.tipos_honorario[c.tipo] ?? c.tipo);
+// Valor curto para rótulos de gráfico: "R$ 7,7 mil".
+const moedaCurta = (centavos) => (centavos >= 100000
+  ? `R$ ${(centavos / 100000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} mil`
+  : moeda(centavos));
+
+async function abrirFormularioHonorario(c = {}, empresaFixa = null) {
+  const empresas = empresaFixa ? [] : await api('/api/empresas');
+  const tipo = campo('Tipo *', { tag: 'select', name: 'tipo', valor: c.tipo ?? 'mensal', opcoes: Object.entries(opcoes.tipos_honorario) });
+  const descricao = campo('Descrição', { name: 'descricao', maxlength: 200, valor: c.descricao, placeholder: 'Obrigatória para serviço extra' });
+  const empresaInicial = empresaFixa ?? empresas.find((e) => e.id === c.empresa_id);
+  const valor = campo('Valor (R$) *', {
+    name: 'valor', required: true, inputmode: 'decimal', placeholder: '0,00',
+    valor: reaisCampo(c.valor_centavos ?? (c.id ? null : empresaInicial?.honorario_centavos)),
+  });
+  // Ao escolher o cliente numa cobrança nova, sugere o honorário e o dia de vencimento do cadastro.
+  const vencimento = campo('Vencimento *', { type: 'date', name: 'vencimento', required: true, valor: c.vencimento });
+  const competencia = campo('Competência *', { type: 'month', name: 'competencia', required: true, valor: c.competencia ?? hoje().slice(0, 7) });
+  const sugerir = (e) => {
+    if (c.id || !e) return;
+    if (e.honorario_centavos != null) valor.querySelector('input').value = reaisCampo(e.honorario_centavos);
+    const comp = competencia.querySelector('input').value;
+    if (e.dia_vencimento && comp) {
+      const [ano, mes] = comp.split('-').map(Number);
+      const diaFinal = Math.min(e.dia_vencimento, new Date(ano, mes, 0).getDate());
+      vencimento.querySelector('input').value = `${comp}-${String(diaFinal).padStart(2, '0')}`;
+    }
+  };
+  const seletorEmpresa = empresaFixa ? null : campo('Cliente *', {
+    tag: 'select', name: 'empresa_id', required: true, valor: c.empresa_id ?? '',
+    opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo || e.id === c.empresa_id).map((e) => [e.id, e.razao_social])],
+  }, { inteira: true });
+  seletorEmpresa?.querySelector('select').addEventListener('change', (ev) => sugerir(empresas.find((e) => String(e.id) === ev.target.value)));
+  if (empresaFixa) queueMicrotask(() => sugerir(empresaFixa));
+
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      if (empresaFixa) dados.empresa_id = empresaFixa.id;
+      if (c.id) await api(`/api/honorarios/${c.id}`, { metodo: 'PUT', dados });
+      else await api('/api/honorarios', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar('Cobrança salva.');
+      rotear();
+    }),
+  },
+  h('h2', {}, c.id ? 'Editar cobrança' : `Nova cobrança${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`),
+  h('div', { class: 'grade' },
+    seletorEmpresa, tipo, descricao, competencia, vencimento, valor,
+    campo('Nº da nota do honorário', { name: 'nota_numero', maxlength: 50, valor: c.nota_numero }),
+    campo('Observações', { tag: 'textarea', name: 'observacoes', maxlength: 2000, valor: c.observacoes }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar'),
+    c.id && c.status === 'aberto' ? h('button', {
+      type: 'button', class: 'secundario',
+      onclick: () => { if (confirm('Cancelar esta cobrança?')) { dialogo.close(); acaoHonorario(c, 'cancelar'); } },
+    }, 'Cancelar cobrança') : null,
+    c.id ? h('button', {
+      type: 'button', class: 'perigo',
+      onclick: async () => {
+        if (!confirm(`Excluir a cobrança de ${c.empresa_nome ?? 'cliente'} (${moeda(c.valor_centavos)})?`)) return;
+        try {
+          await api(`/api/honorarios/${c.id}`, { metodo: 'DELETE', dados: {} });
+          dialogo.close();
+          avisar('Cobrança excluída.');
+          rotear();
+        } catch (err) {
+          avisar(err.message, 'erro');
+        }
+      },
+    }, 'Excluir') : null)));
+  dialogo.classList.add('largo');
+}
+
+async function acaoHonorario(c, acao) {
+  try {
+    await api(`/api/honorarios/${c.id}/acao`, { metodo: 'POST', dados: { acao } });
+    rotear();
+  } catch (err) {
+    avisar(err.message, 'erro');
+  }
+}
+
+function abrirRecebimento(c) {
+  const forma = campo('Forma de pagamento', { tag: 'select', name: 'forma_pagamento', valor: 'pix', opcoes: [['', '—'], ...Object.entries(opcoes.formas_pagamento)] });
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/honorarios/${c.id}/acao`, { metodo: 'POST', dados: { acao: 'receber', ...dados } });
+      dialogo.close();
+      avisar('Recebimento registrado.');
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Registrar recebimento'),
+  h('p', { class: 'suave' }, `${c.empresa_nome} · ${rotuloCobranca(c)} · ${nomeMes(c.competencia)} · vence em ${data(c.vencimento)}`),
+  h('div', { class: 'grade' },
+    campo('Recebido em *', { type: 'date', name: 'data', required: true, valor: hoje() }),
+    campo('Valor recebido (R$)', { name: 'valor', inputmode: 'decimal', valor: reaisCampo(c.valor_centavos) }),
+    comOutro(forma, 'forma_outro', { rotulo: 'Qual forma' })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Confirmar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
+function abrirGeracaoHonorarios() {
+  const resultado = h('div', {});
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      const r = await api('/api/honorarios/gerar', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar(`${r.criados} cobrança(s) criada(s)${r.ignorados ? `; ${r.ignorados} já existia(m)` : ''}.`);
+      location.hash = `#/honorarios?competencia=${dados.competencia}`;
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Gerar honorários do mês'),
+  h('p', { class: 'suave' }, 'Cria uma cobrança para cada cliente ativo com honorário no cadastro, pelo valor cadastrado, no dia de vencimento de cada cliente. Quem não tem dia cadastrado usa o dia padrão. Quem já tem a cobrança na competência fica de fora.'),
+  h('div', { class: 'grade' },
+    campo('Tipo', { tag: 'select', name: 'tipo', valor: 'mensal', opcoes: [['mensal', opcoes.tipos_honorario.mensal], ['decimo_terceiro', opcoes.tipos_honorario.decimo_terceiro]] }),
+    campo('Competência *', { type: 'month', name: 'competencia', required: true, valor: hoje().slice(0, 7) }),
+    campo('Dia padrão de vencimento *', { type: 'number', name: 'dia_padrao', required: true, min: 1, max: 31, valor: 10 })),
+  resultado,
+  h('div', { class: 'acoes' },
+    h('button', {
+      type: 'button', class: 'secundario',
+      onclick: async (ev) => {
+        const form = ev.target.closest('form');
+        if (!form.reportValidity()) return;
+        try {
+          const p = await api('/api/honorarios/gerar/previa', { metodo: 'POST', dados: dadosFormulario(form) });
+          const novos = p.empresas.filter((e) => !e.existente);
+          resultado.replaceChildren(h('div', { class: 'alerta info' },
+            h('strong', {}, `${p.novos} cobrança(s) nova(s) · ${moeda(p.valor_centavos)}`),
+            p.existentes ? ` · ${p.existentes} cliente(s) já têm.` : '',
+            p.sem_honorario ? h('div', {}, `${p.sem_honorario} cliente(s) ativo(s) sem honorário no cadastro ficam de fora.`) : null,
+            novos.length ? h('div', { class: 'suave', style: { marginTop: '6px' } },
+              novos.slice(0, 10).map((e) => `${e.razao_social} (${data(e.vencimento)})`).join(', '), novos.length > 10 ? '…' : '') : null));
+        } catch (err) {
+          resultado.replaceChildren(h('div', { class: 'alerta erro' }, err.message));
+        }
+      },
+    }, 'Ver prévia'),
+    h('button', { type: 'submit' }, 'Gerar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+  dialogo.classList.add('largo');
+}
+
+function tabelaHonorarios(lista, { mostrarCliente = true } = {}) {
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Vencimento', mostrarCliente ? 'Cliente' : null, 'Cobrança', 'Valor', 'Situação', '']
+      .filter((t) => t !== null).map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+    h('tbody', {}, lista.map((c) => h('tr', {},
+      h('td', {}, h('span', { class: c.situacao === 'atrasado' ? 'atrasado' : null }, data(c.vencimento))),
+      mostrarCliente ? h('td', {}, h('a', { href: `#/empresa/${c.empresa_id}` }, c.empresa_nome)) : null,
+      h('td', {}, rotuloCobranca(c), h('div', { class: 'suave' },
+        [`comp. ${nomeMes(c.competencia)}`, c.tipo === 'extra' ? 'serviço extra' : null, c.nota_numero ? `NF ${c.nota_numero}` : null].filter(Boolean).join(' · '))),
+      h('td', { class: 'num' }, moeda(c.situacao === 'recebido' ? c.valor_recebido_centavos ?? c.valor_centavos : c.valor_centavos)),
+      h('td', {}, etiquetaSituacaoHonorario(c.situacao), c.situacao === 'recebido' ? h('div', { class: 'suave' },
+        `em ${data(c.recebido_em)}`, c.forma_pagamento ? ` · ${rotuloComOutro(opcoes.formas_pagamento, c.forma_pagamento, c.forma_outro)}` : '') : null),
+      h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
+        c.status === 'aberto' ? h('button', { onclick: () => abrirRecebimento(c) }, 'Recebido') : null,
+        c.status !== 'aberto' ? h('button', { class: 'secundario', onclick: () => acaoHonorario(c, 'reabrir') }, 'Reabrir') : null,
+        h('button', { class: 'secundario', onclick: () => abrirFormularioHonorario(c) }, 'Editar'))))))));
+}
+
+async function telaHonorarios(query) {
+  const filtros = new URLSearchParams(query);
+  if (!filtros.has('competencia')) filtros.set('competencia', hoje().slice(0, 7));
+  const [{ lista, resumo }, empresas, equipe] = await Promise.all([
+    api(`/api/honorarios?${filtros}`), api('/api/empresas'), equipeDoEscritorio(),
+  ]);
+  const situacao = filtros.get('situacao') || '';
+  const competencia = filtros.get('competencia');
+  const indicador = (valor, rotulo) => h('div', {
+    class: `indicador${situacao === valor ? ' selecionado' : ''}`, style: { '--cor': CORES_SITUACAO_HONORARIO[valor] },
+    onclick: () => { if (situacao === valor) filtros.delete('situacao'); else filtros.set('situacao', valor); location.hash = `#/honorarios?${filtros}`; },
+  }, h('div', { class: 'numero' }, moeda(resumo[valor].valor_centavos)), h('div', { class: 'rotulo' }, `${resumo[valor].quantidade} ${rotulo}`));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, competencia ? `Honorários de ${nomeDoMes(competencia)}` : 'Honorários'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('a', { class: 'botao secundario', href: `/api/honorarios.csv?${filtros}` }, 'Exportar CSV'),
+        h('button', { class: 'secundario', onclick: abrirGeracaoHonorarios }, 'Gerar do mês'),
+        h('button', { class: 'destaque', onclick: () => abrirFormularioHonorario() }, '+ Nova cobrança'))),
+    h('div', { class: 'indicadores' },
+      indicador('aberto', 'em aberto, no prazo'),
+      indicador('atrasado', competencia ? 'em atraso (todas as competências)' : 'em atraso'),
+      indicador('recebido', 'recebida(s)'),
+      indicador('cancelado', 'cancelada(s)')),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        const d = dadosFormulario(ev.target);
+        const novo = new URLSearchParams();
+        for (const [k, v] of Object.entries(d)) if (v || k === 'competencia') novo.set(k, v);
+        location.hash = `#/honorarios?${novo}`;
+      },
+      onchange: (ev) => { if (ev.target.tagName === 'SELECT') ev.currentTarget.requestSubmit(); },
+    },
+    campo('Competência', { type: 'month', name: 'competencia', valor: competencia }),
+    campo('Situação', { tag: 'select', name: 'situacao', valor: situacao, opcoes: [['', 'Todas'], ...Object.entries(opcoes.situacoes_honorario)] }),
+    campo('Cliente', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todos'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+    campo('Tipo', { tag: 'select', name: 'tipo', valor: filtros.get('tipo'), opcoes: [['', 'Todos'], ...Object.entries(opcoes.tipos_honorario)] }),
+    campo('Responsável', { tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'), opcoes: [['', 'Toda a equipe'], ...equipe.map((u) => [u.id, u.nome])] }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
+    h('a', { href: `#/honorarios?competencia=${situacao ? `&situacao=${situacao}` : ''}`, class: 'botao secundario' }, 'Todas as competências')),
+    lista.length
+      ? h('div', {}, h('p', { class: 'suave' }, `${lista.length} cobrança(s)`), tabelaHonorarios(lista))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma cobrança neste filtro. Use "Gerar do mês" para criar o honorário de todos os clientes de uma vez.'));
+}
+
+async function telaReceita(query) {
+  const filtros = new URLSearchParams(query);
+  const mes = filtros.get('mes') || hoje().slice(0, 7);
+  const r = await api(`/api/receita?mes=${mes}`);
+  const indicador = (numero, rotulo, detalhe, cor, href) => h('div', {
+    class: 'indicador', style: { '--cor': cor, cursor: href ? 'pointer' : 'default' }, onclick: href ? () => { location.hash = href; } : null,
+  }, h('div', { class: 'rotulo' }, rotulo), h('div', { class: 'numero' }, numero), detalhe ? h('div', { class: 'suave' }, detalhe) : null);
+  const totalTipos = Object.values(r.por_tipo).reduce((t, v) => t + v, 0);
+  const maiorRegime = Math.max(1, ...r.por_regime.map((x) => x.recorrente_centavos));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('div', {}, h('h1', {}, 'Receita'), h('div', { class: 'suave' }, `Honorários de ${nomeDoMes(mes)}`)),
+      h('form', {
+        class: 'filtros', style: { marginBottom: 0 },
+        onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('receita', dadosFormulario(ev.target)); },
+        onchange: (ev) => ev.currentTarget.requestSubmit(),
+      }, campo('Mês', { type: 'month', name: 'mes', valor: mes }))),
+    h('div', { class: 'indicadores' },
+      indicador(moeda(r.recorrente_centavos), 'Receita recorrente (cadastro)', `${r.clientes_com_honorario} cliente(s) com honorário`, 'var(--azul)', null),
+      indicador(moeda(r.faturado_centavos), 'Faturado na competência', null, 'var(--azul-claro)', `#/honorarios?competencia=${mes}`),
+      indicador(moeda(r.recebido_centavos), 'Recebido no mês', 'pela data do recebimento', 'var(--rosa)', null),
+      indicador(moeda(r.atrasado.valor_centavos), 'Em atraso (todas as competências)',
+        `${r.atrasado.cobrancas} cobrança(s) · ${r.atrasado.clientes} cliente(s)`, 'var(--rejeitada)', '#/honorarios?competencia=&situacao=atrasado'),
+      indicador(`${String(r.inadimplencia_mes).replace('.', ',')}%`, 'Inadimplência da competência', 'em atraso ÷ faturado', 'var(--preto)', null)),
+    h('div', { class: 'cartao' },
+      h('h2', {}, 'Faturado e recebido nos últimos 6 meses'),
+      graficoColunas({
+        meses: r.meses,
+        formatar: moedaCurta,
+        formatarCompleto: moeda,
+        largura: window.innerWidth > 900 ? 1040 : 520, // gráfico de largura inteira só no computador
+        eixo: true,
+        series: [
+          { nome: 'Faturado', cor: 'var(--azul-claro)', valores: r.serie.map((x) => x.faturado_centavos) },
+          { nome: 'Recebido', cor: 'var(--rosa)', valores: r.serie.map((x) => x.recebido_centavos) },
+        ],
+      })),
+    h('div', { class: 'colunas-iguais' },
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Receita recorrente por regime'),
+        r.por_regime.length
+          ? h('div', { class: 'rolagem-x' }, h('table', { class: 'manter' },
+            h('thead', {}, h('tr', {}, h('th', {}, 'Regime'), h('th', { class: 'num' }, 'Clientes'), h('th', { class: 'num' }, 'Por mês'))),
+            h('tbody', {}, r.por_regime.map((x) => h('tr', {},
+              h('td', {}, x.rotulo, h('div', { class: 'barra' }, h('span', { style: { width: `${Math.round((x.recorrente_centavos / maiorRegime) * 100)}%` } }))),
+              h('td', { class: 'num' }, x.clientes),
+              h('td', { class: 'num' }, moeda(x.recorrente_centavos)))))))
+          : h('p', { class: 'suave' }, 'Nenhum cliente ativo com honorário no cadastro.')),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Faturado por tipo na competência'),
+        h('table', { class: 'manter' }, h('tbody', {}, Object.entries(opcoes.tipos_honorario).map(([tipo, rotulo]) => h('tr', {},
+          h('td', {}, rotulo, h('div', { class: 'barra' }, h('span', { style: { width: `${totalTipos ? Math.round((r.por_tipo[tipo] / totalTipos) * 100) : 0}%` } }))),
+          h('td', { class: 'num' }, moeda(r.por_tipo[tipo])))))))),
+    h('h2', {}, 'Por cliente'),
+    r.clientes.length
+      ? h('div', { class: 'tabela' }, h('table', {},
+        h('thead', {}, h('tr', {}, ['Cliente', 'Regime', 'Honorário', 'Faturado', 'Recebido', 'Em aberto', 'Em atraso']
+          .map((t, i) => h('th', { class: i >= 2 ? 'num' : null }, t)))),
+        h('tbody', {}, r.clientes.map((c) => h('tr', {},
+          h('td', {}, h('a', { href: `#/empresa/${c.id}` }, c.razao_social), c.ativo ? null : h('div', { class: 'suave' }, 'inativo')),
+          h('td', {}, c.regime ? rotuloComOutro(opcoes.regimes, c.regime, c.regime_outro) : h('span', { class: 'suave' }, '—')),
+          h('td', { class: 'num' }, c.honorario_centavos ? moeda(c.honorario_centavos) : '—'),
+          h('td', { class: 'num' }, c.faturado_centavos ? moeda(c.faturado_centavos) : h('span', { class: 'suave' }, 'não gerado')),
+          h('td', { class: 'num' }, c.recebido_centavos ? moeda(c.recebido_centavos) : '—'),
+          h('td', { class: 'num' }, c.em_aberto_centavos ? moeda(c.em_aberto_centavos) : '—'),
+          h('td', { class: 'num' }, c.atrasado_centavos
+            ? h('a', { class: 'atrasado', href: `#/honorarios?competencia=&situacao=atrasado&empresa_id=${c.id}` },
+              moeda(c.atrasado_centavos), h('div', { class: 'suave' }, `desde ${data(c.atrasado_desde)}`))
+            : '—'))))))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum cliente com honorário ainda.'));
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard (visão geral do escritório)
 // ---------------------------------------------------------------------------
 
@@ -2327,34 +2631,40 @@ const mesAbreviado = (m) => new Date(`${m}-15T12:00:00`).toLocaleDateString('pt-
 
 // Colunas por mês (uma ou mais séries lado a lado), com o valor sobre cada coluna, dica ao
 // passar o mouse e a tabela com os números logo abaixo.
-function graficoColunas({ meses, series }) {
-  const largura = 520;
+// Com eixo: linhas de grade com os valores à esquerda, sem rótulo em cada coluna (para valores
+// longos, como reais, que se sobreporiam). largura: a do espaço que o gráfico ocupa na tela.
+function graficoColunas({ meses, series, formatar = String, formatarCompleto = formatar, largura = 520, eixo = false }) {
   const altura = 200;
   const topo = 20;
   const base = 24;
+  // No celular o texto do gráfico é maior (ver styles.css), então o eixo pede mais espaço.
+  const esquerda = eixo ? (largura < 700 ? 120 : 70) : 0;
   const util = altura - topo - base;
-  const maximo = Math.max(1, ...series.flatMap((x) => x.valores));
-  const grupo = largura / meses.length;
+  const maior = Math.max(1, ...series.flatMap((x) => x.valores));
+  // No eixo, o topo é um múltiplo redondo de 2 × potência de 10, para a metade também ser redonda.
+  const potencia = 10 ** Math.floor(Math.log10(maior));
+  const maximo = eixo ? Math.ceil(maior / (potencia * 2)) * potencia * 2 : maior;
+  const grupo = (largura - esquerda) / meses.length;
   const vao = 2;
   const barra = Math.min(30, (grupo * 0.62 - vao * (series.length - 1)) / series.length);
   const larguraGrupo = barra * series.length + vao * (series.length - 1);
 
   const colunas = meses.flatMap((m, i) => series.map((serie, j) => {
     const valor = serie.valores[i];
-    const x = i * grupo + (grupo - larguraGrupo) / 2 + j * (barra + vao);
+    const x = esquerda + i * grupo + (grupo - larguraGrupo) / 2 + j * (barra + vao);
     const alturaBarra = (valor / maximo) * util;
     const y = altura - base - alturaBarra;
     const r = Math.min(4, alturaBarra, barra / 2);
     const fundo = altura - base;
     return svg('g', { class: 'coluna' },
-      svg('title', {}, `${serie.nome} · ${nomeDoMes(m)}: ${valor}`),
+      svg('title', {}, `${serie.nome} · ${nomeDoMes(m)}: ${formatarCompleto(valor)}`),
       // Área de toque maior que a coluna, para a dica aparecer mesmo em colunas baixas.
       svg('rect', { x: x - vao, y: topo, width: barra + vao * 2, height: util, fill: 'transparent' }),
       valor > 0 ? svg('path', {
         d: `M${x},${fundo} V${y + r} Q${x},${y} ${x + r},${y} H${x + barra - r} Q${x + barra},${y} ${x + barra},${y + r} V${fundo} Z`,
         fill: serie.cor,
       }) : null,
-      valor > 0 ? svg('text', { x: x + barra / 2, y: y - 6, 'text-anchor': 'middle', class: 'valor' }, valor) : null);
+      valor > 0 && !eixo ? svg('text', { x: x + barra / 2, y: y - 6, 'text-anchor': 'middle', class: 'valor' }, formatar(valor)) : null);
   }));
 
   return h('div', { class: 'grafico' },
@@ -2362,13 +2672,18 @@ function graficoColunas({ meses, series }) {
       ? h('div', { class: 'legenda-grafico' }, series.map((serie) => h('span', {}, h('i', { style: { background: serie.cor } }), serie.nome)))
       : null,
     svg('svg', { viewBox: `0 0 ${largura} ${altura}`, role: 'img', 'aria-label': series.map((x) => x.nome).join(' e ') },
-      svg('line', { x1: 0, x2: largura, y1: altura - base, y2: altura - base, class: 'eixo' }),
+      eixo ? [0.5, 1].map((f) => {
+        const y = altura - base - f * util;
+        return [svg('line', { x1: esquerda, x2: largura, y1: y, y2: y, class: 'grade' }),
+          svg('text', { x: esquerda - 8, y: y + 4, 'text-anchor': 'end', class: 'mes' }, formatar(maximo * f))];
+      }) : null,
+      svg('line', { x1: esquerda, x2: largura, y1: altura - base, y2: altura - base, class: 'eixo' }),
       colunas,
-      meses.map((m, i) => svg('text', { x: i * grupo + grupo / 2, y: altura - 6, 'text-anchor': 'middle', class: 'mes' }, mesAbreviado(m)))),
+      meses.map((m, i) => svg('text', { x: esquerda + i * grupo + grupo / 2, y: altura - 6, 'text-anchor': 'middle', class: 'mes' }, mesAbreviado(m)))),
     h('details', { class: 'ver-numeros' }, h('summary', {}, 'Ver os números'),
       h('table', { class: 'manter' },
         h('thead', {}, h('tr', {}, h('th', {}, 'Mês'), series.map((x) => h('th', { class: 'num' }, x.nome)))),
-        h('tbody', {}, meses.map((m, i) => h('tr', {}, h('td', {}, nomeDoMes(m)), series.map((x) => h('td', { class: 'num' }, x.valores[i]))))))));
+        h('tbody', {}, meses.map((m, i) => h('tr', {}, h('td', {}, nomeDoMes(m)), series.map((x) => h('td', { class: 'num' }, formatarCompleto(x.valores[i])))))))));
 }
 
 async function telaDashboard(query) {
@@ -2410,8 +2725,11 @@ async function telaDashboard(query) {
         `${p.vencimentos.pagos_no_mes} já pago(s)`, 'var(--roxo)', `#/vencimentos?mes=${mes}`),
       indicador(p.clientes.ativos, 'Clientes ativos',
         `${p.clientes.novos_no_mes} novo(s) no mês · ${p.clientes.inativos} inativo(s)`, 'var(--azul)', '#/empresas'),
-      indicador(moeda(p.honorarios.base_mensal_centavos), 'Honorários mensais (base)',
-        `Ticket médio ${moeda(p.honorarios.ticket_medio_centavos)}`, 'var(--rosa)', null),
+      p.financeiro
+        ? indicador(moeda(p.financeiro.recebido_no_mes_centavos), 'Honorários recebidos no mês',
+          `de ${moeda(p.financeiro.faturado_no_mes_centavos)} faturado · ${moeda(p.financeiro.atrasado_centavos)} em atraso`, 'var(--rosa)', `#/receita?mes=${mes}`)
+        : indicador(moeda(p.honorarios.base_mensal_centavos), 'Honorários mensais (base)',
+          `Ticket médio ${moeda(p.honorarios.ticket_medio_centavos)}`, 'var(--rosa)', null),
       indicador(p.operacao.notas_emitidas, 'Notas emitidas no mês',
         `${p.operacao.notas_abertas} pedido(s) em aberto`, 'var(--azul-claro)', `#/notas?mes=${mes}`),
       indicador(p.operacao.guias, 'Guias recalculadas no mês', null, 'var(--roxo)', `#/ocorrencias?tipo=guia_recalculada&${periodo}`),
@@ -2479,6 +2797,8 @@ const ICONES = {
   demandas: [['path', { d: 'M9 11l3 3L22 4' }], ['path', { d: 'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' }]],
   calendario: [['rect', { x: 3, y: 4, width: 18, height: 18, rx: 2 }], ['line', { x1: 16, y1: 2, x2: 16, y2: 6 }],
     ['line', { x1: 8, y1: 2, x2: 8, y2: 6 }], ['line', { x1: 3, y1: 10, x2: 21, y2: 10 }]],
+  dinheiro: [['line', { x1: 12, y1: 1, x2: 12, y2: 23 }], ['path', { d: 'M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' }]],
+  tendencia: [['polyline', { points: '23 6 13.5 15.5 8.5 10.5 1 18' }], ['polyline', { points: '17 6 23 6 23 12' }]],
   nova: [['circle', { cx: 12, cy: 12, r: 10 }], ['line', { x1: 12, y1: 8, x2: 12, y2: 16 }], ['line', { x1: 8, y1: 12, x2: 16, y2: 12 }]],
 };
 
@@ -2492,6 +2812,7 @@ function itensDoMenu() {
       ['Visão geral', [['#/', 'Dashboard', 'inicio'], ['#/painel-notas', 'Painel de notas', 'painel']]],
       ['Operação', [['#/demandas', 'Demandas', 'demandas'], ['#/vencimentos', 'Vencimentos', 'calendario'], ['#/notas', 'Notas', 'nota'],
         ['#/ocorrencias', 'Guias e multas', 'alerta'], ['#/relatorio', 'Relatório', 'grafico']]],
+      ehGestor() ? ['Financeiro', [['#/honorarios', 'Honorários', 'dinheiro'], ['#/receita', 'Receita', 'tendencia']]] : null,
       ['Cadastros', [['#/empresas', 'Clientes', 'clientes'], ['#/usuarios', 'Usuários', 'usuarios']]],
       ['Integrações', [['#/zen', 'Questor Zen', 'documentos']]],
     ];
@@ -2509,7 +2830,7 @@ function montarMenu(caminho) {
     if (href === '#/demandas') return caminho === '/demandas' || caminho.startsWith('/demanda/');
     return `#${caminho}` === href;
   };
-  document.getElementById('menu').replaceChildren(...itensDoMenu().map(([secao, itens]) => h('div', { class: 'secao-menu' },
+  document.getElementById('menu').replaceChildren(...itensDoMenu().filter(Boolean).map(([secao, itens]) => h('div', { class: 'secao-menu' },
     secao ? h('div', { class: 'titulo-secao' }, secao) : null,
     itens.map(([href, texto, nomeIcone]) => h('a', { href, class: ativo(href) ? 'ativo' : null }, icone(nomeIcone), texto)))));
   document.body.classList.remove('menu-aberto');
@@ -2548,6 +2869,11 @@ async function rotear() {
     if (caminho === '/demandas' && escritorio) return await telaDemandas(query);
     if ((m = caminho.match(/^\/demanda\/(\d+)$/)) && escritorio) return await telaDemanda(m[1]);
     if (caminho === '/vencimentos' && escritorio) return await telaVencimentos(query);
+    if (caminho === '/honorarios' && escritorio && ehGestor()) return await telaHonorarios(query);
+    if (caminho === '/receita' && escritorio && ehGestor()) return await telaReceita(query);
+    if (['/honorarios', '/receita'].includes(caminho) && escritorio) {
+      return renderizar(h('div', { class: 'cartao vazio' }, 'Honorários e receita ficam disponíveis só para gestores e administradores.'));
+    }
     if (caminho === '/empresas' && escritorio) return await telaEmpresas();
     if (caminho === '/usuarios' && escritorio) return await telaUsuarios();
     if (caminho === '/ocorrencias' && escritorio) return await telaOcorrencias(query);

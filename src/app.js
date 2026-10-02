@@ -10,6 +10,7 @@ const { registrarRotasZen } = require('./zen');
 const { registrarRotasPainel } = require('./painel');
 const { registrarRotasDemandas, TIPOS_DEMANDA, PRIORIDADES, STATUS_DEMANDA } = require('./demandas');
 const { registrarRotasVencimentos, SITUACOES_VENCIMENTO } = require('./vencimentos');
+const { registrarRotasHonorarios, TIPOS_HONORARIO, FORMAS_PAGAMENTO, SITUACOES_HONORARIO } = require('./honorarios');
 const { prepararArquivo, prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 const { lerXmlNota } = require('./xmlNota');
 const { criarLimitador } = require('./limitador');
@@ -238,6 +239,7 @@ function criarApp({
 
   rota('GET', '/api/opcoes', () => ({
     canais: CANAIS_PEDIDO, regimes: REGIMES, ufs: UFS, tributos: TRIBUTOS, situacoes_vencimento: SITUACOES_VENCIMENTO,
+    tipos_honorario: TIPOS_HONORARIO, formas_pagamento: FORMAS_PAGAMENTO, situacoes_honorario: SITUACOES_HONORARIO,
     tipos_demanda: TIPOS_DEMANDA, prioridades: PRIORIDADES, status_demanda: STATUS_DEMANDA, acesso_clientes: acessoClientes, portal_clientes: portalClientes, clientes_entram: clientesEntram,
   }), { portal: true });
 
@@ -291,6 +293,13 @@ function criarApp({
     if (regime && !REGIMES[regime]) throw new ErroValidacao('Regime tributário inválido.');
     const uf = corpo.uf ? String(corpo.uf).trim().toUpperCase() : null;
     if (uf && !UFS.includes(uf)) throw new ErroValidacao('UF inválida.');
+    let diaVencimento = null;
+    if (corpo.dia_vencimento !== undefined && corpo.dia_vencimento !== null && String(corpo.dia_vencimento).trim() !== '') {
+      diaVencimento = Number(corpo.dia_vencimento);
+      if (!Number.isInteger(diaVencimento) || diaVencimento < 1 || diaVencimento > 31) {
+        throw new ErroValidacao('Dia de vencimento do honorário inválido (1 a 31).');
+      }
+    }
     const dataContrato = corpo.data_contrato ? String(corpo.data_contrato) : null;
     if (dataContrato && !dataValidaISO(dataContrato)) throw new ErroValidacao('Data de início do contrato inválida.');
     return {
@@ -304,6 +313,7 @@ function criarApp({
       uf,
       data_contrato: dataContrato,
       observacoes: texto('Observações', corpo.observacoes, { max: 2000 }),
+      dia_vencimento: diaVencimento,
       email,
       telefone: texto('Telefone', corpo.telefone, { max: 30 }),
       ativo: corpo.ativo === false || corpo.ativo === 0 ? 0 : 1,
@@ -326,7 +336,7 @@ function criarApp({
 
   const CAMPOS_EMPRESA = ['razao_social', 'cnpj', 'email', 'telefone', 'ativo', 'plano_notas', 'plano_nome', 'notas_incluidas',
     'honorario_centavos', 'responsavel_id', 'nome_fantasia', 'regime', 'regime_outro', 'endereco', 'cidade', 'uf', 'data_contrato',
-    'observacoes'];
+    'observacoes', 'dia_vencimento'];
 
   function erroUnico(err, mensagem) {
     if (String(err.message).includes('UNIQUE')) throw new ErroValidacao(mensagem, 409);
@@ -429,6 +439,7 @@ function criarApp({
       usuarios: conta('SELECT COUNT(*) AS n FROM usuarios WHERE empresa_id = ?'),
       demandas: conta('SELECT COUNT(*) AS n FROM demandas WHERE empresa_id = ?'),
       vencimentos: conta('SELECT COUNT(*) AS n FROM vencimentos WHERE empresa_id = ?'),
+      honorarios: conta('SELECT COUNT(*) AS n FROM honorarios WHERE empresa_id = ?'),
     };
   }
 
@@ -451,6 +462,7 @@ function criarApp({
         db.prepare('DELETE FROM ocorrencias WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM demandas WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM vencimentos WHERE empresa_id = ?').run(id);
+        db.prepare('DELETE FROM honorarios WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM usuarios WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM empresas WHERE id = ?').run(id);
       }
@@ -459,7 +471,7 @@ function criarApp({
   }
 
   function somarDependencias(ids) {
-    const total = { empresas: ids.length, notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0, demandas: 0, vencimentos: 0 };
+    const total = { empresas: ids.length, notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0, demandas: 0, vencimentos: 0, honorarios: 0 };
     for (const id of ids) {
       const dep = dependenciasEmpresa(id);
       for (const chave of Object.keys(dep)) total[chave] += dep[chave];
@@ -472,7 +484,7 @@ function criarApp({
     const empresa = db.prepare('SELECT id FROM empresas WHERE id = ?').get(params.id);
     if (!empresa) throw new ErroValidacao('Empresa não encontrada.', 404);
     const dep = dependenciasEmpresa(empresa.id);
-    if ((dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos) && corpo.confirmacao !== 'EXCLUIR') {
+    if ((dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos || dep.honorarios) && corpo.confirmacao !== 'EXCLUIR') {
       throw new ErroValidacao('Esta empresa tem registros. Digite EXCLUIR para confirmar.', 409);
     }
     apagarEmpresas([empresa.id]);
@@ -878,6 +890,7 @@ function criarApp({
   registrarRotasPainel({ rota, db, hoje: hojeBrasilia });
   registrarRotasDemandas({ rota, db, hoje: hojeBrasilia });
   registrarRotasVencimentos({ rota, db, hoje: hojeBrasilia });
+  registrarRotasHonorarios({ rota, db, hoje: hojeBrasilia });
 
   // ---------- servidor HTTP ----------
 
