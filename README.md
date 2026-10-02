@@ -17,6 +17,10 @@ cliente, mês e responsável, com a identidade visual da marca.
   que a opção "Outro" é escolhida, um campo para descrevê-la é obrigatório.
 - **Perfil do cliente**: tudo do cliente no período, com **ficha para imprimir/salvar em PDF**
   (reunião de reajuste) e o indicador **honorário por demanda**.
+- **Excluir empresa**: pela lista ou pelo perfil; se houver registros, mostra o que será apagado e
+  exige digitar EXCLUIR. **Administradores** também podem selecionar várias empresas (com busca e
+  "selecionar todas") e excluir em lote. O primeiro usuário criado é administrador; outros são
+  promovidos em *Usuários → Tornar admin*.
 - **Responsável por cliente**: cada empresa tem uma pessoa da equipe; painel, notas e relatório
   filtram por responsável.
 

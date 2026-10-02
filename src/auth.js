@@ -33,7 +33,7 @@ function encerrarSessao(db, token) {
 function usuarioDaSessao(db, token) {
   if (!token) return null;
   const linha = db.prepare(`
-    SELECT u.id, u.nome, u.email, u.papel, u.empresa_id, s.expira_em
+    SELECT u.id, u.nome, u.email, u.papel, u.empresa_id, u.admin, s.expira_em
     FROM sessoes s JOIN usuarios u ON u.id = s.usuario_id
     WHERE s.token = ? AND u.ativo = 1
   `).get(token);

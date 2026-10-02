@@ -21,7 +21,7 @@ const totalUsuarios = db.prepare('SELECT COUNT(*) AS n FROM usuarios').get().n;
 if (totalUsuarios === 0) {
   const email = process.env.ADMIN_EMAIL ?? 'admin@escritorio.com.br';
   const senha = process.env.ADMIN_SENHA ?? crypto.randomBytes(9).toString('base64url');
-  db.prepare("INSERT INTO usuarios (nome, email, senha_hash, papel) VALUES (?, ?, ?, 'escritorio')")
+  db.prepare("INSERT INTO usuarios (nome, email, senha_hash, papel, admin) VALUES (?, ?, ?, 'escritorio', 1)")
     .run('Administrador', email, gerarHash(senha));
   console.log('Usuário administrador criado:');
   console.log(`  e-mail: ${email}`);

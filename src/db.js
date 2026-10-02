@@ -121,6 +121,9 @@ const COLUNAS_NOVAS = {
     honorario_centavos: 'INTEGER',
     responsavel_id: 'INTEGER REFERENCES usuarios(id)',
   },
+  usuarios: {
+    admin: 'INTEGER NOT NULL DEFAULT 0',
+  },
   ocorrencias: {
     tributo: 'TEXT',
     competencia: 'TEXT',
@@ -162,6 +165,11 @@ function migrar(db) {
     for (const [coluna, definicao] of Object.entries(colunas)) {
       if (!existentes.has(coluna)) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`);
     }
+  }
+  // Sempre há um administrador: se nenhum estiver marcado, o primeiro usuário da equipe passa a ser.
+  if (!db.prepare("SELECT 1 FROM usuarios WHERE admin = 1 AND papel = 'escritorio' AND ativo = 1").get()) {
+    db.prepare(`UPDATE usuarios SET admin = 1 WHERE id = (
+      SELECT id FROM usuarios WHERE papel = 'escritorio' AND ativo = 1 ORDER BY id LIMIT 1)`).run();
   }
 }
 

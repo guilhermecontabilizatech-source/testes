@@ -69,9 +69,9 @@ function criarApp({
   fs.mkdirSync(pastaArquivos, { recursive: true });
 
   const rotas = [];
-  const rota = (metodo, padrao, handler, { publica = false, papel = null } = {}) => {
+  const rota = (metodo, padrao, handler, { publica = false, papel = null, admin = false } = {}) => {
     const regex = new RegExp(`^${padrao.replace(/\./g, '\\.').replace(/:(\w+)/g, '(?<$1>\\d+)')}$`);
-    rotas.push({ metodo, regex, handler, publica, papel });
+    rotas.push({ metodo, regex, handler, publica, papel, admin });
   };
 
   // ---------- utilitários ----------
@@ -397,30 +397,65 @@ function criarApp({
     return dependenciasEmpresa(params.id);
   }, { papel: 'escritorio' });
 
-  // Exclui a empresa com tudo o que é dela (notas, ocorrências, anexos e acessos de cliente).
-  // Se houver dados, exige a confirmação explícita "EXCLUIR".
+  // Apaga as empresas com tudo o que é delas (notas, histórico, ocorrências, anexos e acessos
+  // de cliente) numa única transação; os arquivos saem do disco depois de gravado.
+  function apagarEmpresas(ids) {
+    const arquivos = [];
+    transacao(db, () => {
+      for (const id of ids) {
+        arquivos.push(
+          ...db.prepare('SELECT a.arquivo FROM anexos a JOIN solicitacoes s ON s.id = a.solicitacao_id WHERE s.empresa_id = ?').all(id),
+          ...db.prepare('SELECT a.arquivo FROM ocorrencia_anexos a JOIN ocorrencias o ON o.id = a.ocorrencia_id WHERE o.empresa_id = ?').all(id),
+        );
+        db.prepare('DELETE FROM solicitacoes WHERE empresa_id = ?').run(id);
+        db.prepare('DELETE FROM ocorrencias WHERE empresa_id = ?').run(id);
+        db.prepare('DELETE FROM usuarios WHERE empresa_id = ?').run(id);
+        db.prepare('DELETE FROM empresas WHERE id = ?').run(id);
+      }
+    });
+    apagarArquivos(pastaArquivos, arquivos.map((a) => a.arquivo));
+  }
+
+  function somarDependencias(ids) {
+    const total = { empresas: ids.length, notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0 };
+    for (const id of ids) {
+      const dep = dependenciasEmpresa(id);
+      for (const chave of ['notas', 'ocorrencias', 'arquivos', 'usuarios']) total[chave] += dep[chave];
+    }
+    return total;
+  }
+
+  // Exclui uma empresa. Se houver registros vinculados, exige a confirmação "EXCLUIR".
   rota('DELETE', '/api/empresas/:id', ({ params, corpo }) => {
     const empresa = db.prepare('SELECT id FROM empresas WHERE id = ?').get(params.id);
     if (!empresa) throw new ErroValidacao('Empresa não encontrada.', 404);
     const dep = dependenciasEmpresa(empresa.id);
-    const temDados = dep.notas || dep.ocorrencias || dep.usuarios;
-    if (temDados && corpo.confirmacao !== 'EXCLUIR') {
+    if ((dep.notas || dep.ocorrencias || dep.usuarios) && corpo.confirmacao !== 'EXCLUIR') {
       throw new ErroValidacao('Esta empresa tem registros. Digite EXCLUIR para confirmar.', 409);
     }
-    const arquivos = [
-      ...db.prepare('SELECT a.arquivo FROM anexos a JOIN solicitacoes s ON s.id = a.solicitacao_id WHERE s.empresa_id = ?').all(empresa.id),
-      ...db.prepare('SELECT a.arquivo FROM ocorrencia_anexos a JOIN ocorrencias o ON o.id = a.ocorrencia_id WHERE o.empresa_id = ?').all(empresa.id),
-    ].map((a) => a.arquivo);
-    transacao(db, () => {
-      // Histórico, anexos de notas e anexos de ocorrências saem em cascata.
-      db.prepare('DELETE FROM solicitacoes WHERE empresa_id = ?').run(empresa.id);
-      db.prepare('DELETE FROM ocorrencias WHERE empresa_id = ?').run(empresa.id);
-      db.prepare('DELETE FROM usuarios WHERE empresa_id = ?').run(empresa.id);
-      db.prepare('DELETE FROM empresas WHERE id = ?').run(empresa.id);
-    });
-    apagarArquivos(pastaArquivos, arquivos);
+    apagarEmpresas([empresa.id]);
     return { ok: true, ...dep };
   }, { papel: 'escritorio' });
+
+  // Exclusão em lote (só administradores): sempre exige digitar "EXCLUIR".
+  function idsDoLote(corpo) {
+    if (!Array.isArray(corpo.ids) || !corpo.ids.length) throw new ErroValidacao('Selecione ao menos uma empresa.');
+    if (corpo.ids.length > 1000) throw new ErroValidacao('Selecione no máximo 1.000 empresas por vez.');
+    const ids = [...new Set(corpo.ids.map(Number))];
+    const existentes = db.prepare(`SELECT id FROM empresas WHERE id IN (${ids.map(() => '?').join(', ')})`).all(...ids).map((e) => e.id);
+    if (existentes.length !== ids.length) throw new ErroValidacao('Alguma empresa selecionada não existe mais. Atualize a página.', 409);
+    return existentes;
+  }
+
+  rota('POST', '/api/empresas/excluir-lote/previa', ({ corpo }) => somarDependencias(idsDoLote(corpo)), { papel: 'escritorio', admin: true });
+
+  rota('POST', '/api/empresas/excluir-lote', ({ corpo }) => {
+    const ids = idsDoLote(corpo);
+    if (corpo.confirmacao !== 'EXCLUIR') throw new ErroValidacao('Digite EXCLUIR para confirmar a exclusão em lote.', 409);
+    const total = somarDependencias(ids);
+    apagarEmpresas(ids);
+    return { ok: true, ...total };
+  }, { papel: 'escritorio', admin: true });
 
   rota('PUT', '/api/empresas/:id', ({ params, corpo }) => {
     const e = validarEmpresa(corpo);
@@ -437,12 +472,12 @@ function criarApp({
   // ---------- usuários ----------
 
   rota('GET', '/api/usuarios', () => db.prepare(`
-    SELECT u.id, u.nome, u.email, u.papel, u.empresa_id, u.ativo, u.criado_em, e.razao_social AS empresa_nome
+    SELECT u.id, u.nome, u.email, u.papel, u.empresa_id, u.ativo, u.admin, u.criado_em, e.razao_social AS empresa_nome
     FROM usuarios u LEFT JOIN empresas e ON e.id = u.empresa_id
     ORDER BY u.papel DESC, u.nome
   `).all().map((l) => ({ ...l })), { papel: 'escritorio' });
 
-  rota('POST', '/api/usuarios', ({ corpo }) => {
+  rota('POST', '/api/usuarios', ({ corpo, usuario }) => {
     const nome = texto('Nome', corpo.nome, { obrigatorio: true, max: 200 });
     const email = texto('E-mail', corpo.email, { obrigatorio: true, max: 200 });
     if (!emailValido(email)) throw new ErroValidacao('E-mail inválido.');
@@ -458,8 +493,10 @@ function criarApp({
     const senha = String(corpo.senha ?? '');
     if (senha.length < 8) throw new ErroValidacao('A senha deve ter pelo menos 8 caracteres.');
     try {
-      const r = db.prepare('INSERT INTO usuarios (nome, email, senha_hash, papel, empresa_id) VALUES (?, ?, ?, ?, ?)')
-        .run(nome, email, auth.gerarHash(senha), papel, empresaId);
+      // Só um administrador pode criar outro administrador.
+      const admin = papel === 'escritorio' && usuario.admin && (corpo.admin === true || corpo.admin === '1') ? 1 : 0;
+      const r = db.prepare('INSERT INTO usuarios (nome, email, senha_hash, papel, empresa_id, admin) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(nome, email, auth.gerarHash(senha), papel, empresaId, admin);
       return { id: Number(r.lastInsertRowid) };
     } catch (err) {
       return erroUnico(err, 'Já existe um usuário com este e-mail.');
@@ -475,7 +512,18 @@ function criarApp({
     if (corpo.senha && String(corpo.senha).length < 8) {
       throw new ErroValidacao('A senha deve ter pelo menos 8 caracteres.');
     }
-    db.prepare('UPDATE usuarios SET nome = ?, ativo = ? WHERE id = ?').run(nome, ativo, alvo.id);
+    let admin = alvo.admin;
+    if (corpo.admin !== undefined && Boolean(corpo.admin) !== Boolean(alvo.admin)) {
+      if (!usuario.admin) throw new ErroValidacao('Só um administrador pode alterar o perfil de administrador.', 403);
+      if (alvo.papel !== 'escritorio') throw new ErroValidacao('Clientes não podem ser administradores.');
+      if (alvo.id === usuario.id) throw new ErroValidacao('Você não pode remover o seu próprio perfil de administrador.');
+      admin = corpo.admin ? 1 : 0;
+    }
+    if (alvo.admin && !ativo) {
+      const outros = db.prepare("SELECT COUNT(*) AS n FROM usuarios WHERE admin = 1 AND ativo = 1 AND id <> ?").get(alvo.id).n;
+      if (!outros) throw new ErroValidacao('Não é possível desativar o único administrador.');
+    }
+    db.prepare('UPDATE usuarios SET nome = ?, ativo = ?, admin = ? WHERE id = ?').run(nome, ativo, admin, alvo.id);
     if (corpo.senha) {
       db.prepare('UPDATE usuarios SET senha_hash = ? WHERE id = ?').run(auth.gerarHash(String(corpo.senha)), alvo.id);
     }
@@ -838,6 +886,7 @@ function criarApp({
       if (usuario?.papel === 'cliente' && !acessoClientes) usuario = null;
       if (!r.publica && !usuario) throw new ErroValidacao('Faça login para continuar.', 401);
       if (r.papel && usuario.papel !== r.papel) throw new ErroValidacao('Acesso restrito ao escritório.', 403);
+      if (r.admin && !usuario.admin) throw new ErroValidacao('Ação permitida só para administradores.', 403);
 
       // Proteção contra CSRF: requisições que alteram dados precisam vir como JSON.
       if (req.method !== 'GET' && !String(req.headers['content-type'] ?? '').startsWith('application/json')) {

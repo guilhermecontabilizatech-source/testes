@@ -488,6 +488,57 @@ async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
 
 async function telaEmpresas() {
   const empresas = await api('/api/empresas');
+  const podeLote = Boolean(usuario.admin);
+  const selecionadas = new Set();
+  const busca = h('input', { type: 'search', placeholder: 'Buscar por nome, CNPJ ou responsável…', style: { minWidth: '280px' } });
+  const marcarTodas = h('input', { type: 'checkbox', title: 'Selecionar todas as visíveis' });
+  const contador = h('span', { class: 'suave' });
+  const botaoLote = h('button', { class: 'perigo', onclick: () => abrirExclusaoLote(empresas.filter((e) => selecionadas.has(e.id))) });
+  const barraLote = h('div', { class: 'barra-lote', hidden: true }, contador, botaoLote,
+    h('button', { class: 'secundario', onclick: () => { selecionadas.clear(); atualizarSelecao(); } }, 'Limpar seleção'));
+
+  const linhas = empresas.map((e) => {
+    const marcar = podeLote ? h('input', {
+      type: 'checkbox',
+      onchange: (ev) => { if (ev.target.checked) selecionadas.add(e.id); else selecionadas.delete(e.id); atualizarSelecao(); },
+    }) : null;
+    const tr = h('tr', {},
+      podeLote && h('td', {}, marcar),
+      h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social)),
+      h('td', {}, documento(e.cnpj)),
+      h('td', {}, descricaoPlano(e)),
+      h('td', { class: 'num' }, e.honorario_centavos == null ? '—' : moeda(e.honorario_centavos)),
+      h('td', {}, e.responsavel_nome ?? h('span', { class: 'suave' }, '—')),
+      h('td', {}, e.email ?? '', h('div', { class: 'suave' }, e.telefone ?? '')),
+      h('td', {}, e.ativo ? 'Ativa' : 'Inativa'),
+      h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0, flexWrap: 'nowrap' } },
+        h('a', { class: 'botao', href: `#/empresa/${e.id}` }, 'Abrir perfil'),
+        h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar'),
+        h('button', { class: 'secundario', title: 'Excluir empresa', onclick: () => abrirExclusaoEmpresa(e) }, 'Excluir'))));
+    const textoBusca = normalizarBusca(`${e.razao_social} ${e.cnpj} ${documento(e.cnpj)} ${e.responsavel_nome ?? ''}`);
+    return { e, tr, marcar, textoBusca };
+  });
+
+  const visiveis = () => linhas.filter((l) => !l.tr.hidden);
+  function atualizarSelecao() {
+    for (const l of linhas) if (l.marcar) l.marcar.checked = selecionadas.has(l.e.id);
+    const vis = visiveis();
+    marcarTodas.checked = vis.length > 0 && vis.every((l) => selecionadas.has(l.e.id));
+    barraLote.hidden = selecionadas.size === 0;
+    contador.textContent = `${selecionadas.size} empresa(s) selecionada(s)`;
+    botaoLote.textContent = `Excluir ${selecionadas.size} selecionada(s)`;
+  }
+  marcarTodas.addEventListener('change', () => {
+    for (const l of visiveis()) if (marcarTodas.checked) selecionadas.add(l.e.id); else selecionadas.delete(l.e.id);
+    atualizarSelecao();
+  });
+  busca.addEventListener('input', () => {
+    const termo = normalizarBusca(busca.value);
+    for (const l of linhas) l.tr.hidden = Boolean(termo) && !l.textoBusca.includes(termo);
+    atualizarSelecao();
+  });
+
+  const cabecalho = ['Razão social', 'CNPJ', 'Plano de notas', 'Honorário', 'Responsável', 'Contato', 'Situação', ''];
   renderizar(
     h('div', { class: 'cabecalho-pagina' },
       h('h1', {}, 'Empresas clientes'),
@@ -495,21 +546,56 @@ async function telaEmpresas() {
         h('button', { class: 'secundario', onclick: abrirImportacao }, 'Importar planilha ou PDF'),
         h('button', { onclick: () => abrirFormularioEmpresa() }, '+ Nova empresa'))),
     empresas.length
-      ? h('div', { class: 'tabela' }, h('table', {},
-        h('thead', {}, h('tr', {}, ['Razão social', 'CNPJ', 'Plano de notas', 'Honorário', 'Responsável', 'Contato', 'Situação', ''].map((t) => h('th', { class: t === 'Honorário' ? 'num' : null }, t)))),
-        h('tbody', {}, empresas.map((e) => h('tr', {},
-          h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social)),
-          h('td', {}, documento(e.cnpj)),
-          h('td', {}, descricaoPlano(e)),
-          h('td', { class: 'num' }, e.honorario_centavos == null ? '—' : moeda(e.honorario_centavos)),
-          h('td', {}, e.responsavel_nome ?? h('span', { class: 'suave' }, '—')),
-          h('td', {}, e.email ?? '', h('div', { class: 'suave' }, e.telefone ?? '')),
-          h('td', {}, e.ativo ? 'Ativa' : 'Inativa'),
-          h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
-            h('a', { class: 'botao', href: `#/empresa/${e.id}` }, 'Abrir perfil'),
-            h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar'),
-            h('button', { class: 'secundario', title: 'Excluir empresa', onclick: () => abrirExclusaoEmpresa(e) }, 'Excluir'))))))))
+      ? h('div', {},
+        h('div', { class: 'filtros' }, busca, h('span', { class: 'suave' }, `${empresas.length} empresa(s)`),
+          podeLote && h('span', { class: 'suave' }, 'Marque as caixas para excluir várias de uma vez.')),
+        barraLote,
+        h('div', { class: 'tabela' }, h('table', {},
+          h('thead', {}, h('tr', {},
+            podeLote && h('th', {}, marcarTodas),
+            cabecalho.map((t) => h('th', { class: t === 'Honorário' ? 'num' : null }, t)))),
+          h('tbody', {}, linhas.map((l) => l.tr)))))
       : h('div', { class: 'cartao vazio' }, 'Cadastre a primeira empresa cliente ou importe uma planilha para começar.'));
+}
+
+const normalizarBusca = (t) => String(t ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+
+// Exclusão em lote (administradores): prévia do que será apagado e confirmação digitando EXCLUIR.
+async function abrirExclusaoLote(empresas) {
+  const ids = empresas.map((e) => e.id);
+  let previa;
+  try {
+    previa = await api('/api/empresas/excluir-lote/previa', { metodo: 'POST', dados: { ids } });
+  } catch (err) {
+    avisar(err.message, 'erro');
+    return;
+  }
+  const mostrar = empresas.slice(0, 8);
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      const r = await api('/api/empresas/excluir-lote', { metodo: 'POST', dados: { ids, confirmacao: dados.confirmacao } });
+      dialogo.close();
+      avisar(`${r.empresas} empresa(s) excluída(s).`);
+      rotear();
+    }),
+  },
+  h('h2', {}, `Excluir ${empresas.length} empresa(s)`),
+  h('ul', { style: { margin: '0 0 12px', paddingLeft: '18px' } },
+    mostrar.map((e) => h('li', {}, e.razao_social, h('span', { class: 'suave' }, ` · ${documento(e.cnpj)}`))),
+    empresas.length > mostrar.length ? h('li', { class: 'suave' }, `e mais ${empresas.length - mostrar.length}…`) : null),
+  h('div', { class: 'alerta erro' },
+    h('strong', {}, 'Será apagado, sem possibilidade de desfazer:'),
+    h('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } },
+      h('li', {}, `${previa.empresas} empresa(s)`),
+      h('li', {}, `${previa.notas} nota(s) fiscal(is)`),
+      h('li', {}, `${previa.ocorrencias} guia(s) recalculada(s)/multa(s)`),
+      h('li', {}, `${previa.arquivos} arquivo(s) anexado(s)`),
+      previa.usuarios ? h('li', {}, `${previa.usuarios} acesso(s) de cliente`) : null)),
+  h('p', { class: 'suave' }, 'O backup da madrugada guarda os dados até ontem; o que foi lançado hoje não tem cópia.'),
+  campo('Para confirmar, digite EXCLUIR', { name: 'confirmacao', required: true, autocomplete: 'off', pattern: 'EXCLUIR' }),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit', class: 'perigo' }, `Excluir ${empresas.length} empresa(s)`),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
 }
 
 const SITUACAO_IMPORTACAO = {
@@ -1132,12 +1218,23 @@ async function telaUsuarios() {
     opcoes.acesso_clientes
       ? [campo('Perfil', { tag: 'select', name: 'papel', opcoes: [['escritorio', 'Equipe do escritório'], ['cliente', 'Cliente (empresa)']] }),
         campo('Empresa (para clientes)', { tag: 'select', name: 'empresa_id', opcoes: [['', '—'], ...empresas.map((e) => [e.id, e.razao_social])] })]
-      : h('input', { type: 'hidden', name: 'papel', value: 'escritorio' })),
+      : h('input', { type: 'hidden', name: 'papel', value: 'escritorio' }),
+    usuario.admin ? h('label', { class: 'checkbox' }, h('input', { type: 'checkbox', name: 'admin', value: '1' }), 'Administrador (pode excluir em lote e gerenciar administradores)') : null),
   h('div', { class: 'acoes' }, h('button', { type: 'submit' }, 'Criar usuário')));
 
   const alternarAtivo = async (u) => {
     try {
       await api(`/api/usuarios/${u.id}`, { metodo: 'PUT', dados: { nome: u.nome, ativo: !u.ativo } });
+      rotear();
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+  };
+  const alternarAdmin = async (u) => {
+    const acao = u.admin ? 'remover o perfil de administrador de' : 'tornar administrador(a)';
+    if (!confirm(`Deseja ${acao} ${u.nome}?`)) return;
+    try {
+      await api(`/api/usuarios/${u.id}`, { metodo: 'PUT', dados: { nome: u.nome, ativo: Boolean(u.ativo), admin: !u.admin } });
       rotear();
     } catch (err) {
       avisar(err.message, 'erro');
@@ -1162,11 +1259,14 @@ async function telaUsuarios() {
       h('tbody', {}, usuarios.map((u) => h('tr', {},
         h('td', {}, u.nome),
         h('td', {}, u.email),
-        h('td', {}, u.papel === 'escritorio' ? 'Escritório' : 'Cliente'),
+        h('td', {}, u.papel === 'escritorio' ? 'Escritório' : 'Cliente',
+          u.admin ? h('div', {}, h('span', { class: 'etiqueta', style: { '--cor': 'var(--rosa)' } }, 'Administrador')) : null),
         h('td', {}, u.empresa_nome ?? '—'),
         h('td', {}, u.ativo ? 'Ativo' : 'Inativo'),
         h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
           h('button', { class: 'secundario', onclick: () => redefinirSenha(u) }, 'Redefinir senha'),
+          usuario.admin && u.papel === 'escritorio' && u.id !== usuario.id
+            && h('button', { class: 'secundario', onclick: () => alternarAdmin(u) }, u.admin ? 'Remover admin' : 'Tornar admin'),
           u.id !== usuario.id && h('button', { class: 'secundario', onclick: () => alternarAtivo(u) }, u.ativo ? 'Desativar' : 'Reativar')))))))));
 }
 
