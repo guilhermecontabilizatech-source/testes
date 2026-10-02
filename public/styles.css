@@ -250,6 +250,28 @@ table.relatorio td { font-size: 14px; }
 .caixas { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0 14px; margin-bottom: 4px; }
 .caixas label.checkbox { padding-bottom: 6px; }
 
+/* ---------- pesquisas de satisfação ---------- */
+.barra-nps { display: flex; height: 14px; border-radius: 99px; overflow: hidden; background: #eceef6; gap: 2px; }
+.barra-nps span { display: block; height: 100%; }
+.comentario { white-space: pre-wrap; max-width: 360px; }
+.pesquisa-publica { width: min(560px, 100%); }
+.pesquisa-publica h1 { margin-bottom: 4px; }
+.pesquisa-publica fieldset { border: none; padding: 0; margin: 18px 0 0; }
+.pesquisa-publica legend { font-weight: 600; font-size: 14px; margin-bottom: 8px; color: #34384a; }
+.escala { display: grid; grid-template-columns: repeat(var(--notas, 5), minmax(0, 1fr)); gap: 6px; }
+.escala.onze { --notas: 11; gap: 4px; }
+.escala .nota { position: relative; }
+.escala .nota input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.escala .nota span {
+  display: block; text-align: center; padding: 9px 0; font-size: 14px; border: 1px solid #d5d8e5; border-radius: 9px;
+  font-weight: 600; background: #fff; color: var(--preto);
+}
+.escala .nota input:checked + span { background: var(--rosa); border-color: var(--rosa); color: #fff; }
+.escala .nota input:focus-visible + span { outline: 3px solid rgba(25, 43, 194, .25); }
+.extremos { display: flex; justify-content: space-between; font-size: 12px; color: var(--suave); margin-top: 4px; }
+.pesquisa-publica form .grade { margin-top: 18px; }
+.pesquisa-publica form .acoes { margin-top: 20px; }
+
 /* ---------- dashboard ---------- */
 .colunas-iguais { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 @media (max-width: 1000px) { .colunas-iguais { grid-template-columns: minmax(0, 1fr); } }

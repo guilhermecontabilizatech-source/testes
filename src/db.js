@@ -208,6 +208,25 @@ CREATE TABLE IF NOT EXISTS honorarios (
 CREATE INDEX IF NOT EXISTS idx_honorarios_empresa ON honorarios(empresa_id);
 CREATE INDEX IF NOT EXISTS idx_honorarios_competencia ON honorarios(competencia);
 
+-- Pesquisas de satisfação: um link público por envio (token aleatório) e uma resposta por link.
+CREATE TABLE IF NOT EXISTS pesquisas (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  token TEXT NOT NULL UNIQUE,
+  tipo TEXT NOT NULL CHECK (tipo IN ('nps', 'csat', 'completa')),
+  expira_em TEXT NOT NULL,
+  criado_por INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+  respondida_em TEXT,
+  nps INTEGER CHECK (nps IS NULL OR nps BETWEEN 0 AND 10),
+  csat_atendimento INTEGER CHECK (csat_atendimento IS NULL OR csat_atendimento BETWEEN 1 AND 5),
+  csat_prazo INTEGER CHECK (csat_prazo IS NULL OR csat_prazo BETWEEN 1 AND 5),
+  csat_qualidade INTEGER CHECK (csat_qualidade IS NULL OR csat_qualidade BETWEEN 1 AND 5),
+  csat_comunicacao INTEGER CHECK (csat_comunicacao IS NULL OR csat_comunicacao BETWEEN 1 AND 5),
+  comentario TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pesquisas_empresa ON pesquisas(empresa_id);
+
 CREATE TABLE IF NOT EXISTS anexos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   solicitacao_id INTEGER NOT NULL REFERENCES solicitacoes(id) ON DELETE CASCADE,
@@ -248,6 +267,11 @@ const COLUNAS_NOVAS = {
     motivo_outro: 'TEXT',
     causa_outro: 'TEXT',
     tributo_outro: 'TEXT',
+    // Só multas: pendente, paga, contestada ou cancelada, com vencimento e data do pagamento.
+    situacao: 'TEXT',
+    vencimento: 'TEXT',
+    pago_em: 'TEXT',
+    situacao_obs: 'TEXT',
   },
 };
 
@@ -284,6 +308,8 @@ function migrar(db) {
       if (!existentes.has(coluna)) db.exec(`ALTER TABLE ${tabela} ADD COLUMN ${coluna} ${definicao}`);
     }
   }
+  // Multas registradas antes da situação existir começam como pendentes.
+  db.exec("UPDATE ocorrencias SET situacao = 'pendente' WHERE tipo = 'multa' AND situacao IS NULL");
   // Sempre há um administrador: se nenhum estiver marcado, o primeiro usuário da equipe passa a ser.
   if (!db.prepare("SELECT 1 FROM usuarios WHERE admin = 1 AND papel = 'escritorio' AND ativo = 1").get()) {
     db.prepare(`UPDATE usuarios SET admin = 1 WHERE id = (

@@ -5,11 +5,12 @@ const path = require('node:path');
 const auth = require('./auth');
 const { transacao } = require('./db');
 const { paraCsv } = require('./csv');
-const { registrarRotasOperacionais, TRIBUTOS } = require('./operacional');
+const { registrarRotasOperacionais, TRIBUTOS, SITUACOES_MULTA } = require('./operacional');
 const { registrarRotasZen } = require('./zen');
 const { registrarRotasPainel } = require('./painel');
 const { registrarRotasDemandas, TIPOS_DEMANDA, PRIORIDADES, STATUS_DEMANDA } = require('./demandas');
 const { registrarRotasVencimentos, SITUACOES_VENCIMENTO } = require('./vencimentos');
+const { registrarRotasPesquisas, TIPOS_PESQUISA, DIMENSOES_CSAT } = require('./pesquisas');
 const { registrarRotasHonorarios, TIPOS_HONORARIO, FORMAS_PAGAMENTO, SITUACOES_HONORARIO } = require('./honorarios');
 const { prepararArquivo, prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 const { lerXmlNota } = require('./xmlNota');
@@ -87,7 +88,9 @@ function criarApp({
   const rota = (metodo, padrao, handler, {
     publica = false, papel = null, admin = false, gestor = false, portal = false, bruto = false,
   } = {}) => {
-    const regex = new RegExp(`^${padrao.replace(/\./g, '\\.').replace(/:(\w+)/g, '(?<$1>\\d+)')}$`);
+    // :token aceita o código das pesquisas (letras, números, - e _); os demais parâmetros são números.
+    const regex = new RegExp(`^${padrao.replace(/\./g, '\\.').replace(/:(\w+)/g, (_, nome) => (nome === 'token'
+      ? '(?<token>[A-Za-z0-9_-]{20,64})' : `(?<${nome}>\\d+)`))}$`);
     rotas.push({ metodo, regex, handler, publica, papel, admin, gestor, portal, bruto });
   };
 
@@ -239,6 +242,7 @@ function criarApp({
 
   rota('GET', '/api/opcoes', () => ({
     canais: CANAIS_PEDIDO, regimes: REGIMES, ufs: UFS, tributos: TRIBUTOS, situacoes_vencimento: SITUACOES_VENCIMENTO,
+    tipos_pesquisa: TIPOS_PESQUISA, dimensoes_csat: DIMENSOES_CSAT, situacoes_multa: SITUACOES_MULTA,
     tipos_honorario: TIPOS_HONORARIO, formas_pagamento: FORMAS_PAGAMENTO, situacoes_honorario: SITUACOES_HONORARIO,
     tipos_demanda: TIPOS_DEMANDA, prioridades: PRIORIDADES, status_demanda: STATUS_DEMANDA, acesso_clientes: acessoClientes, portal_clientes: portalClientes, clientes_entram: clientesEntram,
   }), { portal: true });
@@ -440,6 +444,7 @@ function criarApp({
       demandas: conta('SELECT COUNT(*) AS n FROM demandas WHERE empresa_id = ?'),
       vencimentos: conta('SELECT COUNT(*) AS n FROM vencimentos WHERE empresa_id = ?'),
       honorarios: conta('SELECT COUNT(*) AS n FROM honorarios WHERE empresa_id = ?'),
+      pesquisas: conta('SELECT COUNT(*) AS n FROM pesquisas WHERE empresa_id = ?'),
     };
   }
 
@@ -463,6 +468,7 @@ function criarApp({
         db.prepare('DELETE FROM demandas WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM vencimentos WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM honorarios WHERE empresa_id = ?').run(id);
+        db.prepare('DELETE FROM pesquisas WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM usuarios WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM empresas WHERE id = ?').run(id);
       }
@@ -471,7 +477,7 @@ function criarApp({
   }
 
   function somarDependencias(ids) {
-    const total = { empresas: ids.length, notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0, demandas: 0, vencimentos: 0, honorarios: 0 };
+    const total = { empresas: ids.length, notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0, demandas: 0, vencimentos: 0, honorarios: 0, pesquisas: 0 };
     for (const id of ids) {
       const dep = dependenciasEmpresa(id);
       for (const chave of Object.keys(dep)) total[chave] += dep[chave];
@@ -484,7 +490,7 @@ function criarApp({
     const empresa = db.prepare('SELECT id FROM empresas WHERE id = ?').get(params.id);
     if (!empresa) throw new ErroValidacao('Empresa não encontrada.', 404);
     const dep = dependenciasEmpresa(empresa.id);
-    if ((dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos || dep.honorarios) && corpo.confirmacao !== 'EXCLUIR') {
+    if ((dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos || dep.honorarios || dep.pesquisas) && corpo.confirmacao !== 'EXCLUIR') {
       throw new ErroValidacao('Esta empresa tem registros. Digite EXCLUIR para confirmar.', 409);
     }
     apagarEmpresas([empresa.id]);
@@ -891,6 +897,7 @@ function criarApp({
   registrarRotasDemandas({ rota, db, hoje: hojeBrasilia });
   registrarRotasVencimentos({ rota, db, hoje: hojeBrasilia });
   registrarRotasHonorarios({ rota, db, hoje: hojeBrasilia });
+  registrarRotasPesquisas({ rota, db, hoje: hojeBrasilia });
 
   // ---------- servidor HTTP ----------
 
@@ -964,7 +971,7 @@ function criarApp({
       const r = rotas.find((x) => {
         if (x.metodo !== req.method) return false;
         const m = x.regex.exec(url.pathname);
-        if (m) params = Object.fromEntries(Object.entries(m.groups ?? {}).map(([k, v]) => [k, Number(v)]));
+        if (m) params = Object.fromEntries(Object.entries(m.groups ?? {}).map(([k, v]) => [k, k === 'token' ? v : Number(v)]));
         return Boolean(m);
       });
       if (!r) throw new ErroValidacao('Rota não encontrada.', 404);

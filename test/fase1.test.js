@@ -127,7 +127,7 @@ test('acesso de clientes desativado por padrão', async () => {
 test('excluir empresa: sem dados direto; com dados exige EXCLUIR e apaga tudo, inclusive arquivos', async () => {
   const ana = await entrar('ana@x.com', 'senha-ana1');
   const vazia = (await ana('POST', '/api/empresas', { razao_social: 'Importada errada', cnpj: '45.723.174/0001-10' })).corpo.id;
-  assert.deepEqual((await ana('GET', `/api/empresas/${vazia}/dependencias`)).corpo, { notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0, demandas: 0, vencimentos: 0, honorarios: 0 });
+  assert.deepEqual((await ana('GET', `/api/empresas/${vazia}/dependencias`)).corpo, { notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0, demandas: 0, vencimentos: 0, honorarios: 0, pesquisas: 0 });
   assert.equal((await ana('DELETE', `/api/empresas/${vazia}`, {})).status, 200);
 
   const empresa = db.prepare("SELECT id FROM empresas WHERE cnpj = '11222333000181'").get().id;

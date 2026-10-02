@@ -29,7 +29,7 @@ const ROTULOS_HISTORICO = {
 
 let usuario = null;
 let opcoes = {
-  canais: {}, regimes: {}, ufs: [], tributos: {}, tipos_honorario: {}, formas_pagamento: {}, situacoes_honorario: {}, situacoes_vencimento: {}, tipos_demanda: {}, prioridades: {}, status_demanda: {}, acesso_clientes: false, portal_clientes: false, clientes_entram: false };
+  canais: {}, regimes: {}, ufs: [], tributos: {}, situacoes_multa: {}, tipos_pesquisa: {}, dimensoes_csat: {}, tipos_honorario: {}, formas_pagamento: {}, situacoes_honorario: {}, situacoes_vencimento: {}, tipos_demanda: {}, prioridades: {}, status_demanda: {}, acesso_clientes: false, portal_clientes: false, clientes_entram: false };
 const conteudo = document.getElementById('conteudo');
 
 // Cria elementos DOM de forma segura (texto nunca é interpretado como HTML).
@@ -497,7 +497,7 @@ async function abrirFormularioEmpresa(e = {}) {
 // Exclusão de empresa: mostra o que será apagado junto e, se houver registros, exige digitar EXCLUIR.
 async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
   const dep = await api(`/api/empresas/${e.id}/dependencias`);
-  const temDados = dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos || dep.honorarios;
+  const temDados = dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos || dep.honorarios || dep.pesquisas;
   const dialogo = abrirDialogo(h('form', {
     onsubmit: aoEnviar(async (dados) => {
       await api(`/api/empresas/${e.id}`, { metodo: 'DELETE', dados: { confirmacao: dados.confirmacao ?? '' } });
@@ -517,6 +517,7 @@ async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
         dep.demandas ? h('li', {}, `${dep.demandas} demanda(s)`) : null,
         dep.vencimentos ? h('li', {}, `${dep.vencimentos} vencimento(s)`) : null,
         dep.honorarios ? h('li', {}, `${dep.honorarios} cobrança(s) de honorário`) : null,
+        dep.pesquisas ? h('li', {}, `${dep.pesquisas} pesquisa(s) de satisfação`) : null,
         dep.arquivos ? h('li', {}, `${dep.arquivos} arquivo(s) anexado(s)`) : null,
         dep.usuarios ? h('li', {}, `${dep.usuarios} acesso(s) de cliente`) : null))
     : h('p', { class: 'suave' }, 'Esta empresa não tem notas, ocorrências, demandas nem vencimentos registrados.'),
@@ -652,6 +653,7 @@ async function abrirExclusaoLote(empresas) {
       previa.demandas ? h('li', {}, `${previa.demandas} demanda(s)`) : null,
       previa.vencimentos ? h('li', {}, `${previa.vencimentos} vencimento(s)`) : null,
       previa.honorarios ? h('li', {}, `${previa.honorarios} cobrança(s) de honorário`) : null,
+      previa.pesquisas ? h('li', {}, `${previa.pesquisas} pesquisa(s) de satisfação`) : null,
       h('li', {}, `${previa.arquivos} arquivo(s) anexado(s)`),
       previa.usuarios ? h('li', {}, `${previa.usuarios} acesso(s) de cliente`) : null)),
   h('p', { class: 'suave' }, 'O backup da madrugada guarda os dados até ontem; o que foi lançado hoje não tem cópia.'),
@@ -816,6 +818,8 @@ function formularioOcorrencia({ opcoes: op, empresas, empresaFixa = null, tipoFi
   const campoMotivo = campo('Motivo *', { tag: 'select', name: 'motivo', required: true, opcoes: motivosDe(tipoInicial) });
   const rotuloValor = (tipo) => (tipo === 'multa' ? 'Valor da multa (R$)' : 'Acréscimo pago — juros/multa (R$)');
   const campoValor = campo(rotuloValor(tipoInicial), { name: 'valor', inputmode: 'decimal', placeholder: '0,00' });
+  const campoVencimento = campo('Vencimento da multa', { type: 'date', name: 'vencimento' });
+  campoVencimento.hidden = tipoInicial !== 'multa';
   const rotuloArquivo = (tipo) => (tipo === 'multa' ? 'Guia / notificação da multa (PDF ou imagem)' : 'Guia recalculada (PDF ou imagem)');
   const inputArquivo = h('input', { type: 'file', name: 'arquivos', multiple: true, accept: '.pdf,.png,.jpg,.jpeg,.xml' });
   const campoArquivo = h('label', { class: 'inteira' }, rotuloArquivo(tipoInicial), inputArquivo);
@@ -824,6 +828,8 @@ function formularioOcorrencia({ opcoes: op, empresas, empresaFixa = null, tipoFi
     select.replaceChildren(...motivosDe(tipo).map(([v, t]) => h('option', { value: v }, t)));
     select.dispatchEvent(new Event('change'));
     campoValor.firstChild.textContent = rotuloValor(tipo);
+    campoVencimento.hidden = tipo !== 'multa';
+    if (tipo !== 'multa') campoVencimento.querySelector('input').value = '';
     campoArquivo.firstChild.textContent = rotuloArquivo(tipo);
   };
 
@@ -862,6 +868,7 @@ function formularioOcorrencia({ opcoes: op, empresas, empresaFixa = null, tipoFi
     comOutro(campo('Causa *', { tag: 'select', name: 'causa', required: true, opcoes: [['', 'Selecione…'], ...Object.entries(op.causas)] }),
       'causa_outro', { rotulo: 'Descreva a causa' }),
     campoValor,
+    campoVencimento,
     campo('Observação', { name: 'descricao', maxlength: 500, placeholder: 'Ex.: cliente avisou do pagamento só no dia 25' }, { inteira: true })),
   h('div', { class: 'acoes' }, h('button', { type: 'submit' }, tipoFixo ? ROTULO_ACAO_OCORRENCIA[tipoFixo] : 'Registrar')));
 }
@@ -1026,7 +1033,8 @@ function tabelaOcorrencias(lista, op, { mostrarEmpresa = true, aoExcluir }) {
       avisar(err.message, 'erro');
     }
   };
-  const cabecalho = ['Data', mostrarEmpresa && 'Empresa', 'Tipo', 'Tributo / comp.', 'Motivo', 'Causa', 'Valor', 'Guia anexada', ''].filter((t) => t !== false);
+  const cabecalho = ['Data', mostrarEmpresa && 'Empresa', 'Tipo', 'Tributo / comp.', 'Motivo', 'Causa', 'Valor', 'Situação', 'Guia anexada', '']
+    .filter((t) => t !== false);
   return h('div', { class: 'tabela' }, h('table', {},
     h('thead', {}, h('tr', {}, cabecalho.map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
     h('tbody', {}, lista.map((o) => h('tr', {},
@@ -1038,10 +1046,13 @@ function tabelaOcorrencias(lista, op, { mostrarEmpresa = true, aoExcluir }) {
       h('td', {}, rotuloComOutro(op.motivos[o.tipo], o.motivo, o.motivo_outro), o.descricao ? h('div', { class: 'suave' }, o.descricao) : null),
       h('td', {}, rotuloComOutro(op.causas, o.causa, o.causa_outro)),
       h('td', { class: 'num' }, o.valor_centavos == null ? '—' : moeda(o.valor_centavos)),
+      h('td', {}, situacaoMulta(o)),
       h('td', {}, o.anexos.length
         ? o.anexos.map((a) => h('div', {}, h('a', { href: `/api/ocorrencias/anexos/${a.id}` }, a.nome_arquivo)))
         : h('span', { class: 'suave' }, 'sem anexo')),
-      h('td', { class: 'nao-imprimir' }, h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir')))))));
+      h('td', { class: 'nao-imprimir' }, h('div', { class: 'acoes', style: { marginTop: 0 } },
+        o.tipo === 'multa' ? h('button', { class: 'secundario', onclick: () => abrirSituacaoMulta(o) }, 'Situação') : null,
+        h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir'))))))));
 }
 
 async function telaOcorrencias(query) {
@@ -1064,6 +1075,7 @@ async function telaOcorrencias(query) {
   campo('Empresa', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todas'], ...empresas.map((e) => [e.id, e.razao_social])] }),
   campo('Tipo', { tag: 'select', name: 'tipo', valor: filtros.get('tipo'), opcoes: [['', 'Todos'], ...Object.entries(opcoes.tipos)] }),
   campo('Causa', { tag: 'select', name: 'causa', valor: filtros.get('causa'), opcoes: [['', 'Todas'], ...Object.entries(opcoes.causas)] }),
+  campo('Situação da multa', { tag: 'select', name: 'situacao', valor: filtros.get('situacao'), opcoes: [['', 'Todas'], ...Object.entries(opcoes.situacoes_multa)] }),
   campo('De', { type: 'date', name: 'inicio', valor: filtros.get('inicio') }),
   campo('Até', { type: 'date', name: 'fim', valor: filtros.get('fim') }),
   h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
@@ -1096,6 +1108,7 @@ async function telaPerfilEmpresa(id, query) {
     api(`/api/demandas?empresa_id=${id}`),
     api(`/api/vencimentos?mes=&empresa_id=${id}`),
   ]);
+  const avaliacoes = await api(`/api/pesquisas?empresa_id=${id}&inicio=2000-01-01`);
   const cobrancas = ehGestor() ? (await api(`/api/honorarios?competencia=&empresa_id=${id}`)).lista.slice(-12) : null;
   // No perfil: vencimentos pendentes (inclusive vencidos) e os 5 últimos já resolvidos.
   const pendentes = vencimentos.lista.filter((v) => v.status === 'pendente');
@@ -1152,6 +1165,13 @@ async function telaPerfilEmpresa(id, query) {
       cobrancas.length
         ? h('div', { style: { marginBottom: '20px' } }, tabelaHonorarios(cobrancas, { mostrarCliente: false }))
         : h('div', { class: 'cartao vazio' }, 'Nenhuma cobrança de honorário registrada.')) : null,
+    h('div', { class: 'cabecalho-pagina', style: { marginBottom: '10px' } }, h('h2', { style: { margin: 0 } }, 'Pesquisas de satisfação'),
+      h('button', { class: 'secundario', onclick: () => abrirNovaPesquisa(e) }, '+ Nova pesquisa')),
+    avaliacoes.aguardando.length
+      ? h('div', { style: { marginBottom: '12px' } }, tabelaAguardando(avaliacoes.aguardando, { mostrarCliente: false })) : null,
+    avaliacoes.respostas.length
+      ? h('div', { style: { marginBottom: '20px' } }, tabelaRespostas(avaliacoes.respostas.slice(0, 5), { mostrarCliente: false }))
+      : h('div', { class: 'cartao vazio' }, 'Este cliente ainda não respondeu nenhuma pesquisa.'),
     h('h2', {}, 'Notas, guias recalculadas e multas'),
     h('form', {
       class: 'filtros',
@@ -2611,6 +2631,261 @@ async function telaReceita(query) {
 }
 
 // ---------------------------------------------------------------------------
+// Situação das multas
+// ---------------------------------------------------------------------------
+
+const CORES_SITUACAO_MULTA = { pendente: 'var(--pendente)', paga: 'var(--emitida)', contestada: 'var(--roxo)', cancelada: 'var(--cancelada)' };
+
+function situacaoMulta(o) {
+  if (o.tipo !== 'multa') return h('span', { class: 'suave' }, '—');
+  const vencida = o.situacao === 'pendente' && o.vencimento && o.vencimento < hoje();
+  return [
+    etiquetaCor(opcoes.situacoes_multa[o.situacao] ?? 'Pendente', vencida ? 'var(--rejeitada)' : CORES_SITUACAO_MULTA[o.situacao]),
+    h('div', { class: 'suave' },
+      o.situacao === 'paga' && o.pago_em ? `paga em ${data(o.pago_em)}`
+        : o.situacao === 'pendente' && o.vencimento ? h('span', { class: vencida ? 'atrasado' : null }, `vence em ${data(o.vencimento)}`) : '',
+      o.situacao_obs ? h('div', {}, o.situacao_obs) : null),
+  ];
+}
+
+function abrirSituacaoMulta(o) {
+  const situacao = campo('Situação *', { tag: 'select', name: 'situacao', valor: o.situacao ?? 'pendente', opcoes: Object.entries(opcoes.situacoes_multa) });
+  const pagoEm = campo('Pago em *', { type: 'date', name: 'pago_em', valor: o.pago_em ?? hoje() });
+  const obs = campo('Observação', { tag: 'textarea', name: 'situacao_obs', maxlength: 500, valor: o.situacao_obs, placeholder: 'Ex.: nº do processo de contestação' }, { inteira: true });
+  const atualizar = () => {
+    const s = situacao.querySelector('select').value;
+    pagoEm.hidden = s !== 'paga';
+    pagoEm.querySelector('input').required = s === 'paga';
+    const exigeObs = s === 'contestada' || s === 'cancelada';
+    obs.firstChild.textContent = exigeObs ? 'Observação *' : 'Observação';
+    obs.querySelector('textarea').required = exigeObs;
+  };
+  situacao.querySelector('select').addEventListener('change', atualizar);
+  atualizar();
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/ocorrencias/${o.id}/situacao`, { metodo: 'POST', dados });
+      dialogo.close();
+      avisar('Situação da multa atualizada.');
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Situação da multa'),
+  h('p', { class: 'suave' }, `${o.empresa_nome} · ${data(o.data)}${o.valor_centavos != null ? ` · ${moeda(o.valor_centavos)}` : ''}`),
+  h('div', { class: 'grade' }, situacao, pagoEm, obs),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
+// ---------------------------------------------------------------------------
+// Pesquisas de satisfação (NPS / CSAT)
+// ---------------------------------------------------------------------------
+
+const linkPesquisa = (p) => `${location.origin}/#/pesquisa/${p.token}`;
+const corNps = (n) => (n == null ? 'var(--cancelada)' : n >= 9 ? 'var(--emitida)' : n >= 7 ? 'var(--pendente)' : 'var(--rejeitada)');
+const rotuloNps = (n) => (n == null ? '—' : n >= 9 ? 'Promotor' : n >= 7 ? 'Neutro' : 'Detrator');
+const textoConvite = (p) => `Olá! Queremos saber como está o atendimento da ContabilizaTech. Leva menos de 1 minuto: ${linkPesquisa(p)}`;
+
+async function copiarLink(p) {
+  try {
+    await navigator.clipboard.writeText(linkPesquisa(p));
+    avisar('Link copiado.');
+  } catch {
+    prompt('Copie o link:', linkPesquisa(p));
+  }
+}
+
+const botoesEnvio = (p) => [
+  h('button', { class: 'secundario', onclick: () => copiarLink(p) }, 'Copiar link'),
+  h('a', { class: 'botao secundario', href: `https://wa.me/?text=${encodeURIComponent(textoConvite(p))}`, target: '_blank', rel: 'noopener' }, 'WhatsApp'),
+];
+
+async function abrirNovaPesquisa(empresaFixa = null) {
+  const empresas = empresaFixa ? [] : await api('/api/empresas');
+  const resultado = h('div', {});
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados, form) => {
+      if (empresaFixa) dados.empresa_id = empresaFixa.id;
+      const p = await api('/api/pesquisas', { metodo: 'POST', dados });
+      form.querySelector('button[type=submit]').hidden = true;
+      resultado.replaceChildren(h('div', { class: 'alerta sucesso' },
+        h('strong', {}, 'Link criado. Envie para o cliente:'),
+        h('div', { style: { margin: '8px 0', wordBreak: 'break-all' } }, h('code', {}, linkPesquisa(p))),
+        h('div', { class: 'acoes', style: { marginTop: 0 } }, botoesEnvio(p))));
+      dialogo.addEventListener('close', rotear);
+    }),
+  },
+  h('h2', {}, `Nova pesquisa de satisfação${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`),
+  h('div', { class: 'grade' },
+    empresaFixa ? null : campo('Cliente *', {
+      tag: 'select', name: 'empresa_id', required: true,
+      opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo).map((e) => [e.id, e.razao_social])],
+    }, { inteira: true }),
+    campo('Perguntas', { tag: 'select', name: 'tipo', valor: 'completa', opcoes: Object.entries(opcoes.tipos_pesquisa) }),
+    campo('Link vale por (dias)', { type: 'number', name: 'validade_dias', min: 1, max: 180, valor: 30 })),
+  resultado,
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Criar link'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar'))));
+}
+
+function abrirPesquisaLote() {
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      const r = await api('/api/pesquisas/lote', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar(`${r.criadas} link(s) criado(s)${r.ja_tinham ? `; ${r.ja_tinham} cliente(s) já tinham pesquisa aguardando` : ''}. Envie cada um pela lista.`);
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Pesquisa para todos os clientes'),
+  h('p', { class: 'suave' }, 'Cria um link para cada cliente ativo que ainda não tem pesquisa aguardando resposta. Depois, envie cada link pela lista "Aguardando resposta" (copiar ou WhatsApp).'),
+  h('div', { class: 'grade' },
+    campo('Perguntas', { tag: 'select', name: 'tipo', valor: 'completa', opcoes: Object.entries(opcoes.tipos_pesquisa) }),
+    campo('Link vale por (dias)', { type: 'number', name: 'validade_dias', min: 1, max: 180, valor: 30 })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Criar links'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
+async function excluirPesquisa(p) {
+  const pergunta = p.respondida_em ? `Excluir a resposta de ${p.empresa_nome}? Ela sai dos indicadores.` : `Cancelar o link de ${p.empresa_nome}?`;
+  if (!confirm(pergunta)) return;
+  try {
+    await api(`/api/pesquisas/${p.id}`, { metodo: 'DELETE', dados: {} });
+    rotear();
+  } catch (err) {
+    avisar(err.message, 'erro');
+  }
+}
+
+function tabelaRespostas(respostas, { mostrarCliente = true } = {}) {
+  const media = (p) => {
+    const notas = Object.keys(opcoes.dimensoes_csat).map((c) => p[c]).filter((n) => n != null);
+    return notas.length ? (notas.reduce((t, n) => t + n, 0) / notas.length).toFixed(1).replace('.', ',') : null;
+  };
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Respondida', mostrarCliente ? 'Cliente' : null, 'NPS', 'Satisfação (1 a 5)', 'Comentário', '']
+      .filter((t) => t !== null).map((t) => h('th', {}, t)))),
+    h('tbody', {}, respostas.map((p) => h('tr', {},
+      h('td', {}, dataHora(p.respondida_em)),
+      mostrarCliente ? h('td', {}, h('a', { href: `#/empresa/${p.empresa_id}` }, p.empresa_nome)) : null,
+      h('td', {}, p.nps == null ? h('span', { class: 'suave' }, '—')
+        : [h('strong', {}, p.nps), ' ', etiquetaCor(rotuloNps(p.nps), corNps(p.nps))]),
+      h('td', {}, media(p) == null ? h('span', { class: 'suave' }, '—') : [h('strong', {}, `média ${media(p)}`),
+        h('div', { class: 'suave' }, Object.entries(opcoes.dimensoes_csat).map(([c, r]) => `${r}: ${p[c]}`).join(' · '))]),
+      h('td', {}, p.comentario ? h('div', { class: 'comentario' }, p.comentario) : h('span', { class: 'suave' }, '—')),
+      h('td', {}, ehGestor() ? h('button', { class: 'secundario', onclick: () => excluirPesquisa(p) }, 'Excluir') : null))))));
+}
+
+function tabelaAguardando(lista, { mostrarCliente = true } = {}) {
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Criada', mostrarCliente ? 'Cliente' : null, 'Perguntas', 'Validade', ''].filter((t) => t !== null).map((t) => h('th', {}, t)))),
+    h('tbody', {}, lista.map((p) => h('tr', {},
+      h('td', {}, dataHora(p.criado_em), p.criado_por_nome ? h('div', { class: 'suave' }, p.criado_por_nome) : null),
+      mostrarCliente ? h('td', {}, h('a', { href: `#/empresa/${p.empresa_id}` }, p.empresa_nome)) : null,
+      h('td', {}, opcoes.tipos_pesquisa[p.tipo]),
+      h('td', {}, p.expirada ? etiquetaCor('Link expirado', 'var(--cancelada)') : `até ${data(p.expira_em)}`),
+      h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
+        p.expirada ? null : botoesEnvio(p),
+        h('button', { class: 'secundario', onclick: () => excluirPesquisa(p) }, p.expirada ? 'Remover' : 'Cancelar link'))))))));
+}
+
+async function telaPesquisas(query) {
+  const filtros = new URLSearchParams(query);
+  const r = await api(`/api/pesquisas?${filtros}`);
+  const s = r.resumo;
+  const indicador = (numero, rotulo, detalhe, cor) => h('div', { class: 'indicador', style: { '--cor': cor, cursor: 'default' } },
+    h('div', { class: 'rotulo' }, rotulo), h('div', { class: 'numero' }, numero), detalhe ? h('div', { class: 'suave' }, detalhe) : null);
+  const totalNps = s.promotores + s.neutros + s.detratores;
+  const fatia = (n, cor, rotulo) => (n ? h('span', { style: { width: `${(n / totalNps) * 100}%`, background: cor }, title: `${rotulo}: ${n}` }) : null);
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, 'Pesquisas de satisfação'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'secundario', onclick: abrirPesquisaLote }, 'Para todos os clientes'),
+        h('button', { class: 'destaque', onclick: () => abrirNovaPesquisa() }, '+ Nova pesquisa'))),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('pesquisas', dadosFormulario(ev.target)); },
+    },
+    campo('Respostas de', { type: 'date', name: 'inicio', valor: r.inicio }),
+    campo('Até', { type: 'date', name: 'fim', valor: r.fim }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Atualizar')),
+    h('div', { class: 'indicadores' },
+      indicador(s.nps == null ? '—' : s.nps, 'NPS do período', 'de −100 a 100 · acima de 50 é muito bom',
+        s.nps == null ? 'var(--cancelada)' : s.nps >= 50 ? 'var(--emitida)' : s.nps >= 0 ? 'var(--pendente)' : 'var(--rejeitada)'),
+      indicador(s.respostas, 'Respostas', s.taxa_resposta == null ? null : `${s.taxa_resposta}% dos links criados no período`, 'var(--azul)'),
+      indicador(s.promotores, 'Promotores (9–10)', `${s.neutros} neutro(s) · ${s.detratores} detrator(es)`, 'var(--emitida)'),
+      indicador(r.aguardando.filter((p) => !p.expirada).length, 'Aguardando resposta', null, 'var(--azul-claro)')),
+    h('div', { class: 'colunas-iguais' },
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Distribuição do NPS'),
+        totalNps
+          ? [h('div', { class: 'barra-nps' },
+            fatia(s.detratores, 'var(--rejeitada)', 'Detratores'), fatia(s.neutros, 'var(--pendente)', 'Neutros'), fatia(s.promotores, 'var(--emitida)', 'Promotores')),
+          h('div', { class: 'legenda-grafico', style: { marginTop: '8px' } },
+            [['Detratores (0–6)', 'var(--rejeitada)', s.detratores], ['Neutros (7–8)', 'var(--pendente)', s.neutros], ['Promotores (9–10)', 'var(--emitida)', s.promotores]]
+              .map(([t, cor, n]) => h('span', {}, h('i', { style: { background: cor } }), `${t}: ${n}`)))]
+          : h('p', { class: 'suave' }, 'Nenhuma nota de NPS no período.')),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Satisfação por aspecto (média de 1 a 5)'),
+        h('table', { class: 'manter' }, h('tbody', {}, Object.entries(opcoes.dimensoes_csat).map(([campoCsat, rotulo]) => h('tr', {},
+          h('td', {}, rotulo, h('div', { class: 'barra' }, h('span', { style: { width: `${((s.csat[campoCsat] ?? 0) / 5) * 100}%` } }))),
+          h('td', { class: 'num' }, h('strong', {}, s.csat[campoCsat] == null ? '—' : String(s.csat[campoCsat]).replace('.', ','))))))))),
+    h('h2', {}, `Aguardando resposta (${r.aguardando.length})`),
+    r.aguardando.length
+      ? h('div', { style: { marginBottom: '20px' } }, tabelaAguardando(r.aguardando))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum link aguardando resposta.'),
+    h('h2', {}, `Respostas do período (${r.respostas.length})`),
+    r.respostas.length ? tabelaRespostas(r.respostas) : h('div', { class: 'cartao vazio' }, 'Nenhuma resposta no período.'));
+}
+
+// Página pública: o cliente abre o link e responde sem login.
+async function telaPesquisaPublica(token) {
+  document.getElementById('topo').hidden = true;
+  document.body.classList.add('tela-login');
+  document.body.classList.remove('com-lateral');
+  const moldura = (...conteudoCartao) => renderizar(h('div', { class: 'pagina-login' }, h('div', { class: 'cartao login pesquisa-publica' },
+    h('img', { class: 'logo-login', src: '/marca/logo.webp', alt: 'ContabilizaTech — a sua contabilidade digital.' }),
+    h('div', { class: 'faixa-marca' }),
+    ...conteudoCartao)));
+  let p;
+  try {
+    p = await api(`/api/pesquisa-publica/${token}`);
+  } catch (err) {
+    return moldura(h('h1', {}, 'Link inválido'), h('p', {}, err.message));
+  }
+  if (p.respondida) return moldura(h('h1', {}, 'Obrigado!'), h('p', {}, 'Esta pesquisa já foi respondida. Sua opinião ajuda a melhorar o nosso atendimento.'));
+  if (p.expirada) return moldura(h('h1', {}, 'Link expirado'), h('p', {}, 'Este link de pesquisa expirou. Se quiser avaliar o atendimento, peça um novo ao escritório.'));
+
+  const escala = (nome, de, ate, rotulos = {}) => h('div', { class: `escala${ate - de === 10 ? ' onze' : ''}`, role: 'radiogroup' },
+    Array.from({ length: ate - de + 1 }, (_, i) => de + i).map((n) => h('label', { class: 'nota', title: rotulos[n] ?? null },
+      h('input', { type: 'radio', name: nome, value: n, required: true }), h('span', {}, n))));
+
+  moldura(
+    h('h1', {}, 'Como está o nosso atendimento?'),
+    h('p', { class: 'suave' }, `Pesquisa rápida para ${p.empresa_nome}. Leva menos de 1 minuto.`),
+    h('form', {
+      onsubmit: aoEnviar(async (dados) => {
+        await api(`/api/pesquisa-publica/${token}`, { metodo: 'POST', dados });
+        moldura(h('h1', {}, 'Obrigado!'), h('p', {}, 'Recebemos a sua avaliação. Ela ajuda a ContabilizaTech a melhorar sempre.'));
+      }),
+    },
+    p.pede_nps ? h('fieldset', {},
+      h('legend', {}, 'De 0 a 10, quanto você recomendaria a ContabilizaTech a um amigo ou empresa parceira?'),
+      escala('nps', 0, 10),
+      h('div', { class: 'extremos' }, h('span', {}, 'Nada provável'), h('span', {}, 'Muito provável'))) : null,
+    Object.entries(p.dimensoes).map(([nome, rotulo]) => h('fieldset', {},
+      h('legend', {}, `${rotulo}: de 1 (muito ruim) a 5 (excelente)`),
+      escala(nome, 1, 5, { 1: 'Muito ruim', 2: 'Ruim', 3: 'Regular', 4: 'Bom', 5: 'Excelente' }))),
+    h('div', { class: 'grade' }, campo('Quer comentar algo? (opcional)', { tag: 'textarea', name: 'comentario', maxlength: 2000 }, { inteira: true })),
+    h('div', { class: 'acoes' }, h('button', { type: 'submit', class: 'destaque', style: { width: '100%' } }, 'Enviar avaliação'))));
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard (visão geral do escritório)
 // ---------------------------------------------------------------------------
 
@@ -2734,10 +3009,10 @@ async function telaDashboard(query) {
         `${p.operacao.notas_abertas} pedido(s) em aberto`, 'var(--azul-claro)', `#/notas?mes=${mes}`),
       indicador(p.operacao.guias, 'Guias recalculadas no mês', null, 'var(--roxo)', `#/ocorrencias?tipo=guia_recalculada&${periodo}`),
       indicador(p.operacao.multas, 'Multas no mês',
-        `${moeda(p.operacao.multas_valor_centavos)} · ${p.operacao.multas_escritorio} por causa do escritório`, 'var(--preto)',
+        `${moeda(p.operacao.multas_valor_centavos)} · ${p.operacao.multas_escritorio} por causa do escritório · ${p.operacao.multas_pendentes} pendente(s) no total`, 'var(--preto)',
         `#/ocorrencias?tipo=multa&${periodo}`),
-      indicador(p.zen.recebidos_no_mes, 'Documentos do Questor Zen no mês',
-        p.zen.sem_empresa ? `${p.zen.sem_empresa} sem empresa associada` : 'Todos associados', 'var(--azul)', '#/zen')),
+      indicador(p.satisfacao.nps == null ? '—' : p.satisfacao.nps, 'NPS dos últimos 90 dias',
+        `${p.satisfacao.respostas} resposta(s) · ${p.satisfacao.aguardando} aguardando`, 'var(--emitida)', '#/pesquisas')),
     h('div', { class: 'colunas-iguais' },
       h('div', { class: 'cartao' },
         h('h2', {}, 'Notas emitidas nos últimos 6 meses'),
@@ -2799,6 +3074,7 @@ const ICONES = {
     ['line', { x1: 8, y1: 2, x2: 8, y2: 6 }], ['line', { x1: 3, y1: 10, x2: 21, y2: 10 }]],
   dinheiro: [['line', { x1: 12, y1: 1, x2: 12, y2: 23 }], ['path', { d: 'M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6' }]],
   tendencia: [['polyline', { points: '23 6 13.5 15.5 8.5 10.5 1 18' }], ['polyline', { points: '17 6 23 6 23 12' }]],
+  estrela: [['polygon', { points: '12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2' }]],
   nova: [['circle', { cx: 12, cy: 12, r: 10 }], ['line', { x1: 12, y1: 8, x2: 12, y2: 16 }], ['line', { x1: 8, y1: 12, x2: 16, y2: 12 }]],
 };
 
@@ -2811,7 +3087,7 @@ function itensDoMenu() {
     return [
       ['Visão geral', [['#/', 'Dashboard', 'inicio'], ['#/painel-notas', 'Painel de notas', 'painel']]],
       ['Operação', [['#/demandas', 'Demandas', 'demandas'], ['#/vencimentos', 'Vencimentos', 'calendario'], ['#/notas', 'Notas', 'nota'],
-        ['#/ocorrencias', 'Guias e multas', 'alerta'], ['#/relatorio', 'Relatório', 'grafico']]],
+        ['#/ocorrencias', 'Guias e multas', 'alerta'], ['#/pesquisas', 'Pesquisas', 'estrela'], ['#/relatorio', 'Relatório', 'grafico']]],
       ehGestor() ? ['Financeiro', [['#/honorarios', 'Honorários', 'dinheiro'], ['#/receita', 'Receita', 'tendencia']]] : null,
       ['Cadastros', [['#/empresas', 'Clientes', 'clientes'], ['#/usuarios', 'Usuários', 'usuarios']]],
       ['Integrações', [['#/zen', 'Questor Zen', 'documentos']]],
@@ -2845,6 +3121,9 @@ function montarMenu(caminho) {
 
 async function rotear() {
   const [caminho, query = ''] = location.hash.slice(1).split('?');
+  // Pesquisa de satisfação: página pública, sem login.
+  const pesquisa = caminho.match(/^\/pesquisa\/([A-Za-z0-9_-]{20,64})$/);
+  if (pesquisa) return telaPesquisaPublica(pesquisa[1]);
   if (!usuario) await carregarUsuario();
   if (!usuario) return telaLogin();
   montarMenu(caminho || '/');
@@ -2869,6 +3148,7 @@ async function rotear() {
     if (caminho === '/demandas' && escritorio) return await telaDemandas(query);
     if ((m = caminho.match(/^\/demanda\/(\d+)$/)) && escritorio) return await telaDemanda(m[1]);
     if (caminho === '/vencimentos' && escritorio) return await telaVencimentos(query);
+    if (caminho === '/pesquisas' && escritorio) return await telaPesquisas(query);
     if (caminho === '/honorarios' && escritorio && ehGestor()) return await telaHonorarios(query);
     if (caminho === '/receita' && escritorio && ehGestor()) return await telaReceita(query);
     if (['/honorarios', '/receita'].includes(caminho) && escritorio) {

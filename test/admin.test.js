@@ -63,7 +63,7 @@ test('exclusão em lote: só administrador, com prévia e confirmação EXCLUIR'
   assert.equal((await equipe('POST', '/api/empresas/excluir-lote', { ids: lote, confirmacao: 'EXCLUIR' })).status, 403);
 
   let r = await chefe('POST', '/api/empresas/excluir-lote/previa', { ids: lote });
-  assert.deepEqual(r.corpo, { empresas: 3, notas: 1, ocorrencias: 1, arquivos: 1, usuarios: 0, demandas: 0, vencimentos: 0, honorarios: 0 });
+  assert.deepEqual(r.corpo, { empresas: 3, notas: 1, ocorrencias: 1, arquivos: 1, usuarios: 0, demandas: 0, vencimentos: 0, honorarios: 0, pesquisas: 0 });
   r = await chefe('POST', '/api/empresas/excluir-lote', { ids: lote });
   assert.equal(r.status, 409, 'sem confirmação');
   r = await chefe('POST', '/api/empresas/excluir-lote', { ids: [...lote, 99999], confirmacao: 'EXCLUIR' });

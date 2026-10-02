@@ -1,6 +1,7 @@
 'use strict';
 
 const { ErroValidacao, REGIMES } = require('./validacao');
+const { calcularNps } = require('./pesquisas');
 
 // Últimos `quantidade` meses (AAAA-MM) terminando em `mes`, do mais antigo ao mais recente.
 function mesesAte(mes, quantidade) {
@@ -99,6 +100,15 @@ function calcularPainel(db, mes, { hoje, usuarioId = null, gestor = false }) {
     pagos_no_mes: umValor("SELECT COUNT(*) AS n FROM vencimentos WHERE status = 'pago' AND substr(vencimento, 1, 7) = ?", mes),
   };
 
+  // Satisfação dos clientes nos últimos 90 dias (até hoje, independentemente do mês escolhido).
+  const satisfacao = calcularNps(db, {
+    inicio: new Date(Date.parse(`${hoje}T12:00:00Z`) - 89 * 86400000).toISOString().slice(0, 10), fim: hoje,
+  });
+  satisfacao.aguardando = umValor('SELECT COUNT(*) AS n FROM pesquisas WHERE respondida_em IS NULL AND expira_em >= ?', hoje);
+  operacao.multas_pendentes = umValor("SELECT COUNT(*) AS n FROM ocorrencias WHERE tipo = 'multa' AND situacao = 'pendente'");
+  operacao.multas_vencidas = umValor(`SELECT COUNT(*) AS n FROM ocorrencias
+    WHERE tipo = 'multa' AND situacao = 'pendente' AND vencimento < ?`, hoje);
+
   // Cobranças de honorários: só para gestores e administradores.
   const financeiro = gestor ? {
     recebido_no_mes_centavos: umValor(`SELECT SUM(COALESCE(valor_recebido_centavos, valor_centavos)) AS n FROM honorarios
@@ -119,6 +129,8 @@ function calcularPainel(db, mes, { hoje, usuarioId = null, gestor = false }) {
   alerta(vencimentos.vencidos, 'vencimento(s) vencido(s) sem pagamento confirmado', '#/vencimentos?situacao=vencido');
   alerta(vencimentos.proximos_sem_envio, 'guia(s) vencendo em até 7 dias ainda não enviada(s) ao cliente', '#/vencimentos?situacao=a_vencer');
   alerta(demandas.atrasadas, 'demanda(s) com prazo vencido', '#/demandas?status=atrasadas');
+  alerta(operacao.multas_vencidas, 'multa(s) vencida(s) ainda pendente(s)', '#/ocorrencias?situacao=pendente');
+  alerta(satisfacao.detratores, 'avaliação(ões) com nota de 0 a 6 (detratores) nos últimos 90 dias', '#/pesquisas');
   alerta(demandas.sem_responsavel, 'demanda(s) em aberto sem responsável', '#/demandas?responsavel_id=nenhum');
   alerta(operacao.notas_abertas, 'pedido(s) de nota ainda não emitido(s)', '#/notas?mes=');
   alerta(clientes.sem_regime, 'cliente(s) ativo(s) sem regime tributário', '#/empresas');
@@ -126,7 +138,7 @@ function calcularPainel(db, mes, { hoje, usuarioId = null, gestor = false }) {
   alerta(clientes.sem_responsavel, 'cliente(s) ativo(s) sem responsável no escritório', '#/empresas');
   alerta(zen.sem_empresa, 'documento(s) do Questor Zen sem empresa associada', '#/zen');
 
-  return { mes, meses, clientes, honorarios, financeiro, operacao, zen, demandas, vencimentos, serie, alertas };
+  return { mes, meses, clientes, honorarios, financeiro, satisfacao, operacao, zen, demandas, vencimentos, serie, alertas };
 }
 
 function registrarRotasPainel({ rota, db, hoje }) {

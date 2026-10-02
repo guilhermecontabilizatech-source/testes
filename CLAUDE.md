@@ -25,11 +25,12 @@ A versão "controle de demandas out–dez/2026" está preservada na tag `v1-cont
 | `src/importacao.js` | Leitura de XLSX/CSV/PDF para importar empresas, com prévia |
 | `src/xmlNota.js` | Leitura de XML de NF-e, NFS-e Nacional e ABRASF |
 | `src/arquivos.js` | Validação e gravação de anexos (nome aleatório, fora de `public/`) |
-| `src/operacional.js` | Guias recalculadas, multas e relatório por cliente (específico da v1) |
+| `src/operacional.js` | Guias recalculadas, multas (com situação: pendente/paga/contestada/cancelada e vencimento) e relatório por cliente |
 | `src/painel.js` | Indicadores do dashboard (`GET /api/painel?mes=`): clientes, honorários base, notas, guias/multas, Zen, pendências |
 | `src/demandas.js` | Demandas por cliente (tipo, prioridade, prazo, responsável), status e histórico/comentários |
 | `src/vencimentos.js` | Vencimentos (guias a pagar): envio ao cliente, pagamento, situação calculada e geração em lote por regime |
 | `src/honorarios.js` | Cobranças de honorários (mensal, 13º, extra), recebimento, geração do mês pelo dia de cada cliente e cálculo da receita (`GET /api/receita`) — só gestor/admin |
+| `src/pesquisas.js` | Pesquisas NPS/CSAT: link público `#/pesquisa/<token>` (rota `:token`, sem login, uma resposta, expira) e `calcularNps` |
 | `src/zen.js` | Webhook do Questor Zen (`ZEN_WEBHOOK_TOKEN`) e portal do cliente (`PORTAL_CLIENTES=1`) |
 | `src/backup.js`, `scripts/` | Backup diário, redefinição de senha |
 | `public/app.js`, `styles.css` | Telas; menu lateral por seções (`itensDoMenu`), gráficos em SVG (`svg()`, `graficoColunas`); identidade visual (tokens de cor no topo do CSS) |
@@ -41,7 +42,8 @@ Base: o protótipo Next.js "portal-contabil", refeito nesta stack. Fase 1 (feita
 (`REGIMES`), CPF de autônomo, endereço, contrato e observações; menu lateral; dashboard em `#/`
 (o antigo painel do mês está em `#/painel-notas`). Fase 2 (feita): demandas, vencimentos e perfil
 Gestor. Fase 3 (feita): honorários (cliente tem `dia_vencimento`) e receita, no menu Financeiro.
-Próxima: 4) multas com status e pesquisas NPS/CSAT. As notas fiscais continuam.
+Fase 4 (feita): situação das multas e pesquisas de satisfação (link público aberto, protegido pelo
+token aleatório e pela validade). As notas fiscais continuam.
 
 Perfis da equipe (`usuarios.admin`, `usuarios.gestor`): colaborador altera as demandas que criou,
 as suas e as sem responsável; gestor altera e exclui demandas e vencimentos de todos;
