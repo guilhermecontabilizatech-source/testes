@@ -28,6 +28,7 @@ const ROTULOS_HISTORICO = {
 };
 
 let usuario = null;
+let opcoes = { canais: {}, acesso_clientes: false };
 const conteudo = document.getElementById('conteudo');
 
 // Cria elementos DOM de forma segura (texto nunca é interpretado como HTML).
@@ -135,9 +136,13 @@ function renderizar(...elementos) {
 
 function telaLogin() {
   document.getElementById('topo').hidden = true;
-  renderizar(h('div', { class: 'cartao login' },
-    h('h1', {}, 'Solicitações de Notas Fiscais'),
-    h('p', { class: 'suave' }, 'Acesse com o e-mail e a senha fornecidos pelo escritório.'),
+  document.getElementById('faixa-marca').hidden = true;
+  document.body.classList.add('tela-login');
+  renderizar(h('div', { class: 'pagina-login' }, h('div', { class: 'cartao login' },
+    h('img', { class: 'logo-login', src: '/marca/logo.webp', alt: 'ContabilizaTech — a sua contabilidade digital.' }),
+    h('div', { class: 'faixa-marca' }),
+    h('h1', {}, 'Gestão do escritório'),
+    h('p', { class: 'suave' }, 'Entre com o e-mail e a senha da sua conta.'),
     h('form', {
       onsubmit: aoEnviar(async (dados) => {
         await api('/api/login', { metodo: 'POST', dados });
@@ -148,10 +153,10 @@ function telaLogin() {
     h('div', { class: 'grade' },
       campo('E-mail', { type: 'email', name: 'email', required: true, autocomplete: 'username', autofocus: true }, { inteira: true }),
       campo('Senha', { type: 'password', name: 'senha', required: true, autocomplete: 'current-password' }, { inteira: true })),
-    h('div', { class: 'acoes' }, h('button', { type: 'submit' }, 'Entrar')))));
+    h('div', { class: 'acoes' }, h('button', { type: 'submit', class: 'destaque', style: { width: '100%' } }, 'Entrar'))))));
 }
 
-async function telaPainel(query) {
+async function telaSolicitacoesCliente(query) {
   const filtros = new URLSearchParams(query);
   const ehEscritorio = usuario.papel === 'escritorio';
   const [resumo, lista, empresas] = await Promise.all([
@@ -335,12 +340,11 @@ async function telaDetalhe(id) {
 
   renderizar(
     h('div', { class: 'cabecalho-pagina' },
-      h('h1', {}, `Solicitação #${s.id} `, etiqueta(s.status)),
-      h('a', { href: '#/' }, '← Voltar para a lista')),
+      h('h1', {}, s.status === 'emitida' ? `Nota nº ${s.numero_nota} ` : `Solicitação #${s.id} `, etiqueta(s.status)),
+      h('a', { href: ehEscritorio ? '#/notas' : '#/' }, '← Voltar para a lista')),
     s.status === 'rejeitada' && h('div', { class: 'alerta erro' }, h('strong', {}, 'Rejeitada: '), s.motivo_rejeicao,
       !ehEscritorio && h('div', {}, 'Clique em "Corrigir e reenviar" para ajustar os dados.')),
-    s.status === 'emitida' && h('div', { class: 'alerta sucesso' }, h('strong', {}, `Nota nº ${s.numero_nota} emitida.`),
-      s.anexos.length ? ' Os arquivos estão disponíveis em "Anexos".' : ''),
+    s.status === 'emitida' && !s.anexos.length && h('div', { class: 'alerta info' }, 'Esta nota ainda não tem o PDF/XML anexado.'),
     h('div', { class: 'colunas' },
       h('div', {},
         h('div', { class: 'cartao' },
@@ -348,16 +352,17 @@ async function telaDetalhe(id) {
           h('dl', { class: 'detalhes' },
             item('Empresa emissora', `${s.empresa_nome} (${documento(s.empresa_cnpj)})`),
             item('Tipo', s.tipo_nota),
-            item('Valor', moeda(s.valor_centavos)),
-            item('Competência', data(s.data_competencia)),
+            item('Valor', s.valor_centavos ? moeda(s.valor_centavos) : ''),
             item('Nº da nota', s.numero_nota),
             item('Data de emissão', data(s.data_emissao)),
-            item('Responsável no escritório', s.responsavel_nome),
+            item('Pedido recebido por', s.canal_pedido ? rotuloComOutro(opcoes.canais, s.canal_pedido, s.canal_outro) : ''),
+            item('Data do pedido', data(s.data_pedido)),
+            item('Registrada por', s.responsavel_nome),
             item('Descrição', s.descricao, true))),
         h('div', { class: 'cartao' },
           h('h2', {}, 'Tomador'),
           h('dl', { class: 'detalhes' },
-            item('Nome / Razão social', s.tomador_nome),
+            item('Nome / Razão social', s.tomador_nome ?? ''),
             item('CPF/CNPJ', documento(s.tomador_documento)),
             item('E-mail', s.tomador_email),
             item('Endereço', s.tomador_endereco, true),
@@ -365,13 +370,25 @@ async function telaDetalhe(id) {
         h('div', { class: 'cartao' },
           h('h2', {}, 'Ações'),
           h('div', { class: 'acoes', style: { marginTop: 0 } },
+            ehEscritorio && s.status === 'emitida' && [
+              h('button', { onclick: () => abrirDialogoNota(null, s) }, 'Editar nota'),
+              h('button', {
+                class: 'secundario',
+                onclick: async () => {
+                  try {
+                    if (await excluirNota(s)) location.hash = '#/notas';
+                  } catch (err) {
+                    avisar(err.message, 'erro');
+                  }
+                },
+              }, 'Excluir nota')],
             s.editavel && h('a', { class: 'botao', href: `#/solicitacao/${s.id}/editar` },
               s.status === 'rejeitada' ? 'Corrigir e reenviar' : 'Editar'),
             s.transicoes.map((destino) => h('button', {
               class: ACOES_STATUS[destino].classe,
               onclick: () => dialogoStatus(s, destino),
             }, ACOES_STATUS[destino].rotulo)),
-            !s.editavel && !s.transicoes.length && h('span', { class: 'suave' }, 'Nenhuma ação disponível.')))),
+            !s.editavel && !s.transicoes.length && !(ehEscritorio && s.status === 'emitida') && h('span', { class: 'suave' }, 'Nenhuma ação disponível.')))),
       h('div', {},
         h('div', { class: 'cartao' },
           h('h2', {}, 'Anexos'),
@@ -382,7 +399,7 @@ async function telaDetalhe(id) {
             : h('p', { class: 'suave' }, 'Nenhum arquivo anexado.'),
           formAnexo),
         h('div', { class: 'cartao' },
-          h('h2', {}, 'Histórico e mensagens'),
+          h('h2', {}, ehEscritorio ? 'Histórico e observações' : 'Histórico e mensagens'),
           h('ul', { class: 'linha-tempo' }, s.historico.map((ev) => h('li', {},
             h('div', {}, h('strong', {}, ev.acao.startsWith('status:') ? `Status: ${STATUS[ev.acao.slice(7)]}` : ROTULOS_HISTORICO[ev.acao] ?? ev.acao)),
             h('div', { class: 'quando' }, `${ev.usuario_nome ?? 'Sistema'} · ${dataHora(ev.criado_em)}`),
@@ -394,7 +411,7 @@ async function telaDetalhe(id) {
               rotear();
             }),
           },
-          campo('Enviar mensagem', { tag: 'textarea', name: 'mensagem', required: true, maxlength: 2000, placeholder: 'Escreva uma dúvida ou observação…' }),
+          campo(ehEscritorio ? 'Adicionar observação' : 'Enviar mensagem', { tag: 'textarea', name: 'mensagem', required: true, maxlength: 2000, placeholder: 'Escreva uma observação…' }),
           h('div', { class: 'acoes', style: { marginTop: '8px' } }, h('button', { type: 'submit', class: 'secundario' }, 'Enviar')))))));
 }
 
@@ -406,7 +423,8 @@ function abrirDialogo(...conteudoDialogo) {
   return dialogo;
 }
 
-function abrirFormularioEmpresa(e = {}) {
+async function abrirFormularioEmpresa(e = {}) {
+  const equipe = await equipeDoEscritorio();
   const dialogo = abrirDialogo(h('form', {
     onsubmit: aoEnviar(async (dados) => {
       const corpo = { ...dados, ativo: dados.ativo === '1', plano_notas: dados.plano_notas === '1' };
@@ -423,9 +441,9 @@ function abrirFormularioEmpresa(e = {}) {
     campo('CNPJ *', { name: 'cnpj', required: true, valor: documento(e.cnpj) }),
     campo('Telefone', { name: 'telefone', valor: e.telefone }),
     campo('E-mail', { type: 'email', name: 'email', valor: e.email }, { inteira: true }),
+    campo('Responsável no escritório', { tag: 'select', name: 'responsavel_id', valor: e.responsavel_id ?? '', opcoes: [['', '—'], ...equipe.map((u) => [u.id, u.nome])] }),
     campo('Situação', { tag: 'select', name: 'ativo', valor: e.ativo === 0 ? '0' : '1', opcoes: [['1', 'Ativa'], ['0', 'Inativa']] }),
-    campo('Honorário mensal (R$)', { name: 'honorario', inputmode: 'decimal', placeholder: '0,00',
-      valor: e.honorario_centavos == null ? '' : (e.honorario_centavos / 100).toFixed(2).replace('.', ',') })),
+    campo('Honorário mensal (R$)', { name: 'honorario', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(e.honorario_centavos) })),
   h('h3', {}, 'Plano de emissão de notas'),
   h('div', { class: 'grade' },
     campo('Tem plano de notas?', { tag: 'select', name: 'plano_notas', valor: e.plano_notas ? '1' : '0', opcoes: [['0', 'Não'], ['1', 'Sim']] }),
@@ -446,19 +464,19 @@ async function telaEmpresas() {
         h('button', { onclick: () => abrirFormularioEmpresa() }, '+ Nova empresa'))),
     empresas.length
       ? h('div', { class: 'tabela' }, h('table', {},
-        h('thead', {}, h('tr', {}, ['Razão social', 'CNPJ', 'Plano de notas', 'Contato', 'Usuários', 'Em aberto', 'Situação', ''].map((t) => h('th', {}, t)))),
+        h('thead', {}, h('tr', {}, ['Razão social', 'CNPJ', 'Plano de notas', 'Honorário', 'Responsável', 'Contato', 'Situação', ''].map((t) => h('th', { class: t === 'Honorário' ? 'num' : null }, t)))),
         h('tbody', {}, empresas.map((e) => h('tr', {},
           h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social)),
           h('td', {}, documento(e.cnpj)),
           h('td', {}, descricaoPlano(e)),
+          h('td', { class: 'num' }, e.honorario_centavos == null ? '—' : moeda(e.honorario_centavos)),
+          h('td', {}, e.responsavel_nome ?? h('span', { class: 'suave' }, '—')),
           h('td', {}, e.email ?? '', h('div', { class: 'suave' }, e.telefone ?? '')),
-          h('td', {}, e.usuarios),
-          h('td', {}, h('a', { href: `#/?empresa_id=${e.id}` }, e.abertas)),
           h('td', {}, e.ativo ? 'Ativa' : 'Inativa'),
           h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
             h('a', { class: 'botao', href: `#/empresa/${e.id}` }, 'Abrir perfil'),
             h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar'))))))))
-      : h('div', { class: 'cartao vazio' }, 'Cadastre a primeira empresa cliente para começar.'));
+      : h('div', { class: 'cartao vazio' }, 'Cadastre a primeira empresa cliente ou importe uma planilha para começar.'));
 }
 
 const SITUACAO_IMPORTACAO = {
@@ -609,18 +627,20 @@ async function obterOpcoesOcorrencia() {
 const ROTULO_ACAO_OCORRENCIA = { guia_recalculada: 'Registrar guia recalculada', multa: 'Registrar multa' };
 
 // Formulário de guia recalculada / multa, com anexo da guia. Usado na tela de
-// ocorrências e no perfil do cliente.
-function formularioOcorrencia({ opcoes, empresas, empresaFixa = null, tipoFixo = null, aoSalvar, classe = null }) {
-  const motivosDe = (tipo) => Object.entries(opcoes.motivos[tipo]);
+// ocorrências, no painel e no perfil do cliente.
+function formularioOcorrencia({ opcoes: op, empresas, empresaFixa = null, tipoFixo = null, aoSalvar, classe = null }) {
+  const motivosDe = (tipo) => [['', 'Selecione…'], ...Object.entries(op.motivos[tipo])];
   const tipoInicial = tipoFixo ?? 'multa';
-  const selectMotivo = campo('Motivo *', { tag: 'select', name: 'motivo', required: true, opcoes: [['', 'Selecione…'], ...motivosDe(tipoInicial)] });
+  const campoMotivo = campo('Motivo *', { tag: 'select', name: 'motivo', required: true, opcoes: motivosDe(tipoInicial) });
   const rotuloValor = (tipo) => (tipo === 'multa' ? 'Valor da multa (R$)' : 'Acréscimo pago — juros/multa (R$)');
   const campoValor = campo(rotuloValor(tipoInicial), { name: 'valor', inputmode: 'decimal', placeholder: '0,00' });
   const rotuloArquivo = (tipo) => (tipo === 'multa' ? 'Guia / notificação da multa (PDF ou imagem)' : 'Guia recalculada (PDF ou imagem)');
   const inputArquivo = h('input', { type: 'file', name: 'arquivos', multiple: true, accept: '.pdf,.png,.jpg,.jpeg,.xml' });
   const campoArquivo = h('label', { class: 'inteira' }, rotuloArquivo(tipoInicial), inputArquivo);
   const trocarTipo = (tipo) => {
-    selectMotivo.querySelector('select').replaceChildren(...[['', 'Selecione…'], ...motivosDe(tipo)].map(([v, t]) => h('option', { value: v }, t)));
+    const select = campoMotivo.querySelector('select');
+    select.replaceChildren(...motivosDe(tipo).map(([v, t]) => h('option', { value: v }, t)));
+    select.dispatchEvent(new Event('change'));
     campoValor.firstChild.textContent = rotuloValor(tipo);
     campoArquivo.firstChild.textContent = rotuloArquivo(tipo);
   };
@@ -628,7 +648,7 @@ function formularioOcorrencia({ opcoes, empresas, empresaFixa = null, tipoFixo =
   const campoTipo = tipoFixo
     ? h('input', { type: 'hidden', name: 'tipo', value: tipoFixo })
     : (() => {
-      const c = campo('Tipo *', { tag: 'select', name: 'tipo', required: true, valor: tipoInicial, opcoes: Object.entries(opcoes.tipos) });
+      const c = campo('Tipo *', { tag: 'select', name: 'tipo', required: true, valor: tipoInicial, opcoes: Object.entries(op.tipos) });
       c.querySelector('select').addEventListener('change', (ev) => trocarTipo(ev.target.value));
       return c;
     })();
@@ -642,8 +662,9 @@ function formularioOcorrencia({ opcoes, empresas, empresaFixa = null, tipoFixo =
       delete dados.arquivos;
       const arquivos = await lerArquivosSelecionados(inputArquivo);
       await api('/api/ocorrencias', { metodo: 'POST', dados: { ...dados, arquivos } });
-      avisar(`${opcoes.tipos[dados.tipo]} registrada${arquivos.length ? ` com ${arquivos.length} arquivo(s)` : ''}.`);
+      avisar(`${op.tipos[dados.tipo]} registrada${arquivos.length ? ` com ${arquivos.length} arquivo(s)` : ''}.`);
       f.reset();
+      for (const s of f.querySelectorAll('select')) s.dispatchEvent(new Event('change'));
       aoSalvar?.();
     }),
   },
@@ -651,57 +672,75 @@ function formularioOcorrencia({ opcoes, empresas, empresaFixa = null, tipoFixo =
     campoEmpresa,
     campoTipo,
     campoArquivo,
-    campo('Tributo', { tag: 'select', name: 'tributo', opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.tributos)] }),
+    comOutro(campo('Tributo', { tag: 'select', name: 'tributo', opcoes: [['', 'Selecione…'], ...Object.entries(op.tributos)] }),
+      'tributo_outro', { rotulo: 'Qual tributo?' }),
     campo('Competência', { type: 'month', name: 'competencia' }),
     campo('Data *', { type: 'date', name: 'data', required: true, valor: hoje() }),
-    selectMotivo,
-    campo('Causa *', { tag: 'select', name: 'causa', required: true, opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.causas)] }),
+    comOutro(campoMotivo, 'motivo_outro', { rotulo: 'Descreva o motivo' }),
+    comOutro(campo('Causa *', { tag: 'select', name: 'causa', required: true, opcoes: [['', 'Selecione…'], ...Object.entries(op.causas)] }),
+      'causa_outro', { rotulo: 'Descreva a causa' }),
     campoValor,
     campo('Observação', { name: 'descricao', maxlength: 500, placeholder: 'Ex.: cliente avisou do pagamento só no dia 25' }, { inteira: true })),
   h('div', { class: 'acoes' }, h('button', { type: 'submit' }, tipoFixo ? ROTULO_ACAO_OCORRENCIA[tipoFixo] : 'Registrar')));
 }
 
-async function abrirDialogoOcorrencia(tipo, empresa) {
-  const opcoes = await obterOpcoesOcorrencia();
+async function abrirDialogoOcorrencia(tipo, empresa = null) {
+  const [op, empresas] = await Promise.all([obterOpcoesOcorrencia(), empresa ? [] : api('/api/empresas')]);
   const dialogo = abrirDialogo(
-    h('h2', {}, `${ROTULO_ACAO_OCORRENCIA[tipo]} — ${empresa.razao_social}`),
-    formularioOcorrencia({ opcoes, empresas: [], empresaFixa: empresa, tipoFixo: tipo, aoSalvar: () => { dialogo.close(); rotear(); } }),
+    h('h2', {}, `${ROTULO_ACAO_OCORRENCIA[tipo]}${empresa ? ` — ${empresa.razao_social}` : ''}`),
+    formularioOcorrencia({ opcoes: op, empresas, empresaFixa: empresa, tipoFixo: tipo, aoSalvar: () => { dialogo.close(); rotear(); } }),
     h('div', { class: 'acoes' }, h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar')));
+  dialogo.classList.add('largo');
 }
 
-// Registro de nota já emitida: anexa XML/PDF; com XML, os dados são lidos automaticamente.
-async function abrirDialogoNota(empresaFixa = null) {
-  const empresas = empresaFixa ? [empresaFixa] : (await api('/api/empresas')).filter((e) => e.ativo);
-  const inputArquivos = h('input', { type: 'file', multiple: true, accept: '.xml,.pdf', required: true });
+// Registro (ou edição) de nota emitida. Com XML, os dados são lidos automaticamente.
+async function abrirDialogoNota(empresaFixa = null, nota = null) {
+  const editando = Boolean(nota);
+  const empresas = empresaFixa || editando ? [] : (await api('/api/empresas')).filter((e) => e.ativo);
+  const inputArquivos = h('input', { type: 'file', multiple: true, accept: '.xml,.pdf' });
   const caixaLeitura = h('div', {});
-  const selectEmpresa = empresaFixa
-    ? h('input', { type: 'hidden', name: 'empresa_id', value: empresaFixa.id })
+  const selectEmpresa = empresaFixa || editando
+    ? h('input', { type: 'hidden', name: 'empresa_id', value: empresaFixa?.id ?? nota.empresa_id })
     : h('select', { name: 'empresa_id', required: true }, h('option', { value: '' }, 'Selecione… (ou anexe o XML)'),
       empresas.map((e) => h('option', { value: e.id }, e.razao_social)));
-  const selectVinculo = h('select', { name: 'solicitacao_id' }, h('option', { value: '' }, 'Nenhuma: registrar como nova nota'));
-  const dadosTomador = h('div', { class: 'grade' },
-    campo('Tipo de nota *', { tag: 'select', name: 'tipo_nota', opcoes: [['NFS-e', 'NFS-e (serviço)'], ['NF-e', 'NF-e (produto)']] }),
-    campo('CPF/CNPJ do tomador *', { name: 'tomador_documento', required: true }),
-    campo('Nome do tomador *', { name: 'tomador_nome', required: true, maxlength: 200 }),
-    campo('E-mail do tomador', { type: 'email', name: 'tomador_email' }),
-    campo('Descrição *', { tag: 'textarea', name: 'descricao', required: true, maxlength: 2000 }, { inteira: true }));
+  const selectVinculo = h('select', { name: 'solicitacao_id' });
+  const campoVinculo = h('label', { class: 'inteira', hidden: true }, 'Atende a qual solicitação em aberto?', selectVinculo);
+  const v = (nome) => nota?.[nome] ?? '';
+
+  const maisDados = h('details', { class: 'mais-dados', open: editando && Boolean(nota.tomador_nome || nota.tomador_documento || nota.descricao) },
+    h('summary', {}, 'Tomador e descrição (opcional)'),
+    h('div', { class: 'grade' },
+      campo('Tipo de nota', { tag: 'select', name: 'tipo_nota', valor: v('tipo_nota'), opcoes: [['', '—'], ['NFS-e', 'NFS-e (serviço)'], ['NF-e', 'NF-e (produto)']] }),
+      campo('CPF/CNPJ do tomador', { name: 'tomador_documento', valor: documento(nota?.tomador_documento) }),
+      campo('Nome do tomador', { name: 'tomador_nome', maxlength: 200, valor: v('tomador_nome') }),
+      campo('E-mail do tomador', { type: 'email', name: 'tomador_email', valor: v('tomador_email') }),
+      campo('Descrição', { tag: 'textarea', name: 'descricao', maxlength: 2000, valor: v('descricao') }, { inteira: true })));
 
   const form = h('form', {
     onsubmit: aoEnviar(async (dados) => {
+      if (editando) {
+        await api(`/api/notas-emitidas/${nota.id}`, { metodo: 'PUT', dados });
+        dialogo.close();
+        avisar('Nota atualizada.');
+        rotear();
+        return;
+      }
       const arquivos = await lerArquivosSelecionados(inputArquivos);
       const r = await api('/api/notas-emitidas', { metodo: 'POST', dados: { ...dados, arquivos } });
       dialogo.close();
-      avisar(r.vinculada ? 'Nota anexada e solicitação marcada como emitida.' : 'Nota registrada. Painel atualizado.');
+      avisar(r.vinculada ? 'Nota registrada e solicitação marcada como emitida.' : `Nota registrada${arquivos.length ? ` com ${arquivos.length} arquivo(s)` : ''}.`);
       rotear();
     }),
   });
-  const valorCampo = (nome) => form.querySelector(`[name=${nome}]`);
-  const preencher = (nome, v) => { if (v != null && valorCampo(nome)) valorCampo(nome).value = v; };
+  const preencher = (nome, valor) => {
+    const el = form.querySelector(`[name=${nome}]`);
+    if (valor != null && el) el.value = valor;
+  };
 
   const atualizarVinculo = () => {
     const vinculada = Boolean(selectVinculo.value);
-    dadosTomador.hidden = vinculada;
-    for (const el of dadosTomador.querySelectorAll('input, textarea, select')) el.disabled = vinculada;
+    maisDados.hidden = vinculada;
+    for (const el of maisDados.querySelectorAll('input, textarea, select')) el.disabled = vinculada;
   };
   selectVinculo.addEventListener('change', atualizarVinculo);
 
@@ -711,7 +750,8 @@ async function abrirDialogoNota(empresaFixa = null) {
   const carregarAbertas = (abertas, sugeridaId) => {
     selectVinculo.replaceChildren(h('option', { value: '' }, 'Nenhuma: registrar como nova nota'),
       ...abertas.map((s) => h('option', { value: s.id, selected: s.id === sugeridaId },
-        `#${s.id} · ${s.tomador_nome} · ${moeda(s.valor_centavos)} · ${STATUS[s.status]}`)));
+        `#${s.id} · ${s.tomador_nome ?? ''} · ${s.valor_centavos ? moeda(s.valor_centavos) : ''} · ${STATUS[s.status]}`)));
+    campoVinculo.hidden = !abertas.length;
     atualizarVinculo();
   };
   const buscarAbertas = async (empresaId) => {
@@ -719,12 +759,12 @@ async function abrirDialogoNota(empresaFixa = null) {
     const abertas = empresaId ? await api(`/api/empresas/${empresaId}/solicitacoes-abertas`) : [];
     if (busca === ultimaBusca) carregarAbertas(abertas, null);
   };
-  if (!empresaFixa) selectEmpresa.addEventListener('change', () => buscarAbertas(selectEmpresa.value).catch(() => {}));
+  if (!empresaFixa && !editando) selectEmpresa.addEventListener('change', () => buscarAbertas(selectEmpresa.value).catch(() => {}));
 
   inputArquivos.addEventListener('change', async () => {
     caixaLeitura.replaceChildren();
     const xml = [...inputArquivos.files].find(ehXml);
-    if (!xml) return buscarAbertas(selectEmpresa.value).catch(() => {});
+    if (!xml) return;
     const busca = ++ultimaBusca;
     try {
       const r = await api('/api/notas/ler-xml', {
@@ -736,12 +776,12 @@ async function abrirDialogoNota(empresaFixa = null) {
       if (!empresaFixa && r.empresa_id) selectEmpresa.value = r.empresa_id;
       preencher('numero_nota', d.numero);
       preencher('data_emissao', d.data_emissao);
-      preencher('valor', d.valor_centavos == null ? null : (d.valor_centavos / 100).toFixed(2).replace('.', ','));
+      preencher('valor', d.valor_centavos == null ? null : reaisCampo(d.valor_centavos));
       preencher('tipo_nota', d.tipo_nota);
       preencher('tomador_documento', documento(d.tomador_documento));
-      preencher('tomador_nome', d.tomador_nome);
+      preencher('tomador_nome', d.tomador_nome?.slice(0, 200));
       preencher('tomador_email', d.tomador_email);
-      preencher('descricao', d.descricao);
+      preencher('descricao', d.descricao?.slice(0, 2000));
       carregarAbertas(r.abertas, r.sugerida_id);
       caixaLeitura.append(h('div', { class: 'alerta sucesso' },
         `XML lido (${d.formato}): nota nº ${d.numero ?? '?'}, ${d.tomador_nome ?? 'tomador não identificado'}, ${d.valor_centavos == null ? 'valor não identificado' : moeda(d.valor_centavos)}.`,
@@ -749,34 +789,53 @@ async function abrirDialogoNota(empresaFixa = null) {
       for (const aviso of r.avisos) caixaLeitura.append(h('div', { class: 'alerta erro' }, aviso));
     } catch (err) {
       caixaLeitura.append(h('div', { class: 'alerta info' }, err.message));
-      buscarAbertas(selectEmpresa.value).catch(() => {});
     }
   });
 
-  form.append(
-    h('div', { class: 'grade' },
-      h('label', { class: 'inteira' }, 'Arquivos da nota (XML e/ou PDF) *', inputArquivos),
+  const partes = [
+    !editando && h('div', { class: 'grade' },
+      h('label', { class: 'inteira' }, 'XML e/ou PDF da nota', inputArquivos),
       empresaFixa ? selectEmpresa : h('label', { class: 'inteira' }, 'Empresa emissora *', selectEmpresa)),
-    h('p', { class: 'suave peq' }, 'Com o XML, número, data, valor e tomador são preenchidos sozinhos e a empresa é identificada pelo CNPJ do emitente.'),
+    editando && selectEmpresa,
+    !editando && h('p', { class: 'suave peq' }, 'Com o XML, número, data, valor e tomador são preenchidos sozinhos e a empresa é identificada pelo CNPJ do emitente. O anexo é opcional, mas recomendado.'),
     caixaLeitura,
     h('div', { class: 'grade' },
-      campo('Número da nota *', { name: 'numero_nota', required: true, maxlength: 50 }),
-      campo('Data de emissão *', { type: 'date', name: 'data_emissao', required: true, valor: hoje() }),
-      campo('Valor (R$) *', { name: 'valor', required: true, inputmode: 'decimal', placeholder: '0,00' }),
-      h('label', { class: 'inteira' }, 'Atende a qual solicitação em aberto?', selectVinculo)),
-    dadosTomador,
+      campo('Número da nota *', { name: 'numero_nota', required: true, maxlength: 50, valor: v('numero_nota') }),
+      campo('Data de emissão *', { type: 'date', name: 'data_emissao', required: true, valor: nota?.data_emissao ?? hoje() }),
+      campo('Valor (R$)', { name: 'valor', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(nota?.valor_centavos) }),
+      comOutro(campo('Pedido recebido por', {
+        tag: 'select', name: 'canal_pedido', valor: editando ? v('canal_pedido') : 'whatsapp',
+        opcoes: [['', '—'], ...Object.entries(opcoes.canais)],
+      }), 'canal_outro', { valor: v('canal_outro'), rotulo: 'Qual canal?' }),
+      campo('Data do pedido', { type: 'date', name: 'data_pedido', valor: v('data_pedido') }),
+      campoVinculo),
+    maisDados,
     h('div', { class: 'acoes' },
-      h('button', { type: 'submit' }, 'Registrar nota emitida'),
-      h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar')));
+      h('button', { type: 'submit', class: 'destaque' }, editando ? 'Salvar alterações' : 'Registrar nota'),
+      h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar')),
+  ];
+  form.append(...partes.filter(Boolean));
 
-  const dialogo = abrirDialogo(h('h2', {}, `Registrar nota emitida${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`), form);
+  const titulo = editando ? `Editar nota nº ${nota.numero_nota}` : `Registrar nota emitida${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`;
+  const dialogo = abrirDialogo(h('h2', {}, titulo), form);
   dialogo.classList.add('largo');
   if (empresaFixa) buscarAbertas(empresaFixa.id).catch(() => {});
 }
 
-function tabelaOcorrencias(lista, opcoes, { mostrarEmpresa = true, aoExcluir }) {
+async function abrirEdicaoNota(id) {
+  abrirDialogoNota(null, await api(`/api/solicitacoes/${id}`));
+}
+
+async function excluirNota(s) {
+  if (!confirm(`Excluir a nota nº ${s.numero_nota ?? s.id} de ${s.empresa_nome}? Os arquivos anexados também serão apagados.`)) return false;
+  await api(`/api/solicitacoes/${s.id}`, { metodo: 'DELETE', dados: {} });
+  avisar('Nota excluída.');
+  return true;
+}
+
+function tabelaOcorrencias(lista, op, { mostrarEmpresa = true, aoExcluir }) {
   const excluir = async (o) => {
-    if (!confirm(`Excluir ${opcoes.tipos[o.tipo].toLowerCase()} de ${o.empresa_nome} (${data(o.data)})?`)) return;
+    if (!confirm(`Excluir ${op.tipos[o.tipo].toLowerCase()} de ${o.empresa_nome} (${data(o.data)})?`)) return;
     try {
       await api(`/api/ocorrencias/${o.id}`, { metodo: 'DELETE', dados: {} });
       avisar('Ocorrência excluída.');
@@ -791,15 +850,16 @@ function tabelaOcorrencias(lista, opcoes, { mostrarEmpresa = true, aoExcluir }) 
     h('tbody', {}, lista.map((o) => h('tr', {},
       h('td', {}, data(o.data)),
       mostrarEmpresa && h('td', {}, h('a', { href: `#/empresa/${o.empresa_id}` }, o.empresa_nome)),
-      h('td', {}, h('span', { class: 'etiqueta', style: { '--cor': o.tipo === 'multa' ? 'var(--rejeitada)' : 'var(--pendente)' } }, opcoes.tipos[o.tipo])),
-      h('td', {}, o.tributo ? opcoes.tributos[o.tributo] : '—', o.competencia ? h('div', { class: 'suave' }, `${o.competencia.slice(5)}/${o.competencia.slice(0, 4)}`) : null),
-      h('td', {}, opcoes.motivos[o.tipo][o.motivo] ?? o.motivo, o.descricao ? h('div', { class: 'suave' }, o.descricao) : null),
-      h('td', {}, opcoes.causas[o.causa]),
+      h('td', {}, h('span', { class: 'etiqueta', style: { '--cor': o.tipo === 'multa' ? 'var(--rejeitada)' : 'var(--pendente)' } }, op.tipos[o.tipo])),
+      h('td', {}, o.tributo ? rotuloComOutro(op.tributos, o.tributo, o.tributo_outro) : '—',
+        o.competencia ? h('div', { class: 'suave' }, `${o.competencia.slice(5)}/${o.competencia.slice(0, 4)}`) : null),
+      h('td', {}, rotuloComOutro(op.motivos[o.tipo], o.motivo, o.motivo_outro), o.descricao ? h('div', { class: 'suave' }, o.descricao) : null),
+      h('td', {}, rotuloComOutro(op.causas, o.causa, o.causa_outro)),
       h('td', { class: 'num' }, o.valor_centavos == null ? '—' : moeda(o.valor_centavos)),
       h('td', {}, o.anexos.length
         ? o.anexos.map((a) => h('div', {}, h('a', { href: `/api/ocorrencias/anexos/${a.id}` }, a.nome_arquivo)))
         : h('span', { class: 'suave' }, 'sem anexo')),
-      h('td', {}, h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir')))))));
+      h('td', { class: 'nao-imprimir' }, h('button', { class: 'secundario', onclick: () => excluir(o) }, 'Excluir')))))));
 }
 
 async function telaOcorrencias(query) {
@@ -845,7 +905,7 @@ async function telaPerfilEmpresa(id, query) {
     inicio: filtros.get('inicio') || PERIODO_PADRAO.inicio,
     fim: filtros.get('fim') || PERIODO_PADRAO.fim,
   });
-  const [empresas, rel, notas, ocorrencias, opcoes] = await Promise.all([
+  const [empresas, rel, notas, ocorrencias, op] = await Promise.all([
     api('/api/empresas'),
     api(`/api/relatorio?${periodo}&empresa_id=${id}`),
     api(`/api/solicitacoes?${periodo}&empresa_id=${id}`),
@@ -857,22 +917,31 @@ async function telaPerfilEmpresa(id, query) {
   const r = rel.empresas[0];
   const indicador = (numero, rotulo, cor) => h('div', { class: 'indicador', style: { '--cor': cor, cursor: 'default' } },
     h('div', { class: 'numero' }, numero), h('div', { class: 'rotulo' }, rotulo));
+  const textoPeriodo = `${data(periodo.get('inicio'))} a ${data(periodo.get('fim'))}`;
 
   renderizar(
+    // Cabeçalho que só aparece na impressão (ficha do cliente para a reunião de reajuste).
+    h('div', { class: 'so-impressao' },
+      h('div', { class: 'cabecalho-impressao' },
+        h('img', { src: '/marca/logo.webp', alt: 'ContabilizaTech' }),
+        h('div', { class: 'suave' }, `Ficha do cliente · ${textoPeriodo} · emitida em ${data(hoje())}`)),
+      h('div', { class: 'faixa-marca', style: { marginBottom: '14px' } })),
     h('div', { class: 'cabecalho-pagina' },
       h('div', {},
         h('h1', {}, e.razao_social),
         h('div', { class: 'suave' }, `CNPJ ${documento(e.cnpj)} · `, descricaoPlanoTexto(e),
-          e.honorario_centavos != null ? ` · honorário ${moeda(e.honorario_centavos)}` : '')),
+          e.honorario_centavos != null ? ` · honorário ${moeda(e.honorario_centavos)}` : '',
+          e.responsavel_nome ? ` · responsável: ${e.responsavel_nome}` : '')),
       h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'secundario', onclick: () => window.print() }, 'Imprimir ficha / PDF'),
         h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar cadastro'),
         h('a', { href: '#/empresas' }, '← Empresas'))),
     h('div', { class: 'acoes-rapidas' },
-      h('button', { class: 'acao-rapida', onclick: () => abrirDialogoNota(e) },
-        h('strong', {}, 'Registrar nota emitida'), h('span', {}, 'Anexe o XML/PDF: dados lidos automaticamente')),
-      h('button', { class: 'acao-rapida', onclick: () => abrirDialogoOcorrencia('guia_recalculada', e) },
+      h('button', { class: 'acao-rapida destaque', onclick: () => abrirDialogoNota(e) },
+        h('strong', {}, 'Registrar nota emitida'), h('span', {}, 'Com XML, os dados são lidos sozinhos')),
+      h('button', { class: 'acao-rapida roxo', onclick: () => abrirDialogoOcorrencia('guia_recalculada', e) },
         h('strong', {}, 'Registrar guia recalculada'), h('span', {}, 'Anexe a nova guia e informe o motivo')),
-      h('button', { class: 'acao-rapida perigo', onclick: () => abrirDialogoOcorrencia('multa', e) },
+      h('button', { class: 'acao-rapida escuro', onclick: () => abrirDialogoOcorrencia('multa', e) },
         h('strong', {}, 'Registrar multa'), h('span', {}, 'Anexe a guia da multa, motivo e causa'))),
     h('form', {
       class: 'filtros',
@@ -882,11 +951,13 @@ async function telaPerfilEmpresa(id, query) {
     campo('Até', { type: 'date', name: 'fim', required: true, valor: periodo.get('fim') }),
     h('button', { type: 'submit', class: 'secundario' }, 'Atualizar período')),
     h('div', { class: 'indicadores' },
-      indicador(r.notas.total, `Notas no período · média ${String(r.notas.media_mensal).replace('.', ',')}/mês`, 'var(--em_emissao)'),
+      indicador(r.notas.total, `Notas no período · média ${String(r.notas.media_mensal).replace('.', ',')}/mês`, 'var(--azul)'),
       e.plano_notas && e.notas_incluidas != null
-        ? indicador(r.meses_acima_franquia, `Meses acima da franquia (${e.notas_incluidas}/mês)`, 'var(--emitida)') : null,
-      indicador(r.guias.total, `Guias recalculadas · cliente ${r.guias.cliente} · escritório ${r.guias.escritorio}`, 'var(--pendente)'),
-      indicador(r.multas.total, `Multas · ${moeda(r.multas.valor_centavos)}`, 'var(--rejeitada)')),
+        ? indicador(r.meses_acima_franquia, `Meses acima da franquia (${e.notas_incluidas}/mês)`, 'var(--rosa)') : null,
+      indicador(r.guias.total, `Guias recalculadas · cliente ${r.guias.cliente} · escritório ${r.guias.escritorio}`, 'var(--roxo)'),
+      indicador(r.multas.total, `Multas · ${moeda(r.multas.valor_centavos)}`, 'var(--preto)'),
+      r.honorario_por_demanda_centavos != null
+        ? indicador(moeda(r.honorario_por_demanda_centavos), `Honorário por demanda (${r.demandas} demandas)`, 'var(--azul-claro)') : null),
     h('div', { class: 'cartao' },
       h('h2', {}, 'Notas por mês'),
       h('div', { class: 'meses' }, rel.meses.map((m) => {
@@ -900,18 +971,18 @@ async function telaPerfilEmpresa(id, query) {
     h('h2', {}, 'Notas do período'),
     notas.length
       ? h('div', { class: 'tabela', style: { marginBottom: '20px' } }, h('table', {},
-        h('thead', {}, h('tr', {}, ['Nº nota', 'Emissão', 'Tomador', 'Valor', 'Status', 'Arquivos'].map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+        h('thead', {}, h('tr', {}, ['Nº nota', 'Emissão', 'Tomador', 'Valor', 'Pedido', 'Arquivos'].map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
         h('tbody', {}, notas.map((s) => h('tr', { class: 'clicavel', onclick: () => { location.hash = `#/solicitacao/${s.id}`; } },
-          h('td', {}, s.numero_nota ?? '—'),
-          h('td', {}, s.data_emissao ? data(s.data_emissao) : '—'),
-          h('td', {}, s.tomador_nome, h('div', { class: 'suave' }, documento(s.tomador_documento))),
-          h('td', { class: 'num' }, moeda(s.valor_centavos)),
-          h('td', {}, etiqueta(s.status)),
+          h('td', {}, h('strong', {}, s.numero_nota ?? '—'), s.status !== 'emitida' ? h('div', {}, etiqueta(s.status)) : null),
+          h('td', {}, data(s.data_nota)),
+          h('td', {}, s.tomador_nome ?? '—', s.tomador_documento ? h('div', { class: 'suave' }, documento(s.tomador_documento)) : null),
+          h('td', { class: 'num' }, s.valor_centavos ? moeda(s.valor_centavos) : '—'),
+          h('td', {}, descricaoPedido(s)),
           h('td', {}, s.anexos ? `${s.anexos} arquivo(s)` : h('span', { class: 'suave' }, 'sem anexo')))))))
       : h('div', { class: 'cartao vazio' }, 'Nenhuma nota neste período.'),
     h('h2', {}, 'Guias recalculadas e multas do período'),
     ocorrencias.length
-      ? tabelaOcorrencias(ocorrencias, opcoes, { mostrarEmpresa: false, aoExcluir: rotear })
+      ? tabelaOcorrencias(ocorrencias, op, { mostrarEmpresa: false, aoExcluir: rotear })
       : h('div', { class: 'cartao vazio' }, 'Nenhuma ocorrência neste período.'));
 }
 
@@ -929,7 +1000,8 @@ async function telaRelatorio(query) {
   if (!filtros.get('fim')) filtros.set('fim', PERIODO_PADRAO.fim);
   const soAlertas = filtros.get('alertas') === '1';
   const periodo = new URLSearchParams({ inicio: filtros.get('inicio'), fim: filtros.get('fim') });
-  const rel = await api(`/api/relatorio?${periodo}`);
+  if (filtros.get('responsavel_id')) periodo.set('responsavel_id', filtros.get('responsavel_id'));
+  const [rel, equipe] = await Promise.all([api(`/api/relatorio?${periodo}`), equipeDoEscritorio()]);
   const empresas = soAlertas ? rel.empresas.filter((e) => e.sinais.length) : rel.empresas;
   const comAlerta = rel.empresas.filter((e) => e.sinais.length).length;
   const oportunidades = rel.empresas.filter((e) => e.sinais.some((s) => s.tipo === 'upsell')).length;
@@ -948,15 +1020,16 @@ async function telaRelatorio(query) {
       onsubmit: (ev) => {
         ev.preventDefault();
         const d = dadosFormulario(ev.target);
-        filtrosNaUrl('relatorio', { inicio: d.inicio, fim: d.fim, alertas: ev.target.alertas.checked ? '1' : '' });
+        filtrosNaUrl('relatorio', { inicio: d.inicio, fim: d.fim, responsavel_id: d.responsavel_id, alertas: ev.target.alertas.checked ? '1' : '' });
       },
     },
     campo('De', { type: 'date', name: 'inicio', required: true, valor: filtros.get('inicio') }),
     campo('Até', { type: 'date', name: 'fim', required: true, valor: filtros.get('fim') }),
+    campo('Responsável', { tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'), opcoes: [['', 'Toda a equipe'], ...equipe.map((u) => [u.id, u.nome])] }),
     h('label', { class: 'checkbox' }, h('input', { type: 'checkbox', name: 'alertas', checked: soAlertas }), 'Só clientes com alerta'),
     h('button', { type: 'submit', class: 'secundario' }, 'Atualizar')),
     h('div', { class: 'indicadores' },
-      indicador(rel.totais.notas, 'Notas solicitadas', 'var(--em_emissao)'),
+      indicador(rel.totais.notas, 'Notas emitidas', 'var(--azul)'),
       indicador(rel.totais.guias, `Guias recalculadas · ${contagemCausa(rel.totais.por_causa.guia_recalculada)}`, 'var(--pendente)'),
       indicador(rel.totais.multas, `Multas · ${moeda(rel.totais.multas_valor_centavos)} · ${contagemCausa(rel.totais.por_causa.multa)}`, 'var(--rejeitada)'),
       indicador(oportunidades, 'Clientes com oportunidade de plano', 'var(--emitida)'),
@@ -979,11 +1052,13 @@ async function telaRelatorio(query) {
           rel.meses.map((m) => h('th', { class: 'num' }, nomeMes(m))),
           h('th', { class: 'num' }, 'Total'), h('th', { class: 'num' }, 'Média/mês'),
           h('th', { class: 'num' }, 'Guias'), h('th', { class: 'num' }, 'Multas'),
+          h('th', { class: 'num', title: 'Honorário do período dividido por notas + guias + multas' }, 'Honorário / demanda'),
           h('th', {}, 'Alertas'))),
         h('tbody', {}, empresas.map((e) => h('tr', {},
           h('td', {}, h('a', { href: `#/empresa/${e.id}` }, h('strong', {}, e.razao_social)), h('div', { class: 'suave' },
             e.plano_notas ? `${e.plano_nome || 'Com plano'} · ${e.notas_incluidas == null ? 'sem limite' : `${e.notas_incluidas}/mês`}` : 'Sem plano de notas',
-            e.honorario_centavos != null ? ` · ${moeda(e.honorario_centavos)}` : '')),
+            e.honorario_centavos != null ? ` · ${moeda(e.honorario_centavos)}` : '',
+            e.responsavel_nome ? ` · ${e.responsavel_nome}` : '')),
           rel.meses.map((m) => {
             const n = e.notas.por_mes[m];
             const acima = e.plano_notas && e.notas_incluidas != null && n > e.notas_incluidas;
@@ -993,12 +1068,14 @@ async function telaRelatorio(query) {
           h('td', { class: 'num' }, String(e.notas.media_mensal).replace('.', ',')),
           h('td', { class: 'num' }, e.guias.total, e.guias.total ? h('div', { class: 'suave' }, `cli ${e.guias.cliente} · esc ${e.guias.escritorio}`) : null),
           h('td', { class: 'num' }, e.multas.total, e.multas.total ? h('div', { class: 'suave' }, moeda(e.multas.valor_centavos)) : null),
+          h('td', { class: 'num' }, e.honorario_por_demanda_centavos == null ? '—' : moeda(e.honorario_por_demanda_centavos),
+            e.demandas ? h('div', { class: 'suave' }, `${e.demandas} demanda(s)`) : null),
           h('td', {}, e.sinais.length
             ? h('ul', { class: 'sinais' }, e.sinais.map((s) => h('li', { style: { '--cor': CORES_SINAL[s.tipo] } }, s.texto)))
             : h('span', { class: 'suave' }, '—')))))))
       : h('div', { class: 'cartao vazio' }, 'Nenhum cliente para mostrar neste período.'),
     h('p', { class: 'suave peq' },
-      `Notas solicitadas contam pela data do pedido (canceladas não entram). Alerta de plano: cliente sem plano com média de ${String(rel.limites.mediaNotasSemPlano).replace('.', ',')} ou mais notas/mês, ou com plano que passou da franquia em algum mês.`));
+      `Notas contam pela data de emissão. Honorário por demanda = honorário do período ÷ (notas + guias + multas): quanto menor, mais trabalho o cliente dá pelo que paga. Alerta de plano: cliente sem plano com média de ${String(rel.limites.mediaNotasSemPlano).replace('.', ',')} ou mais notas/mês, ou com plano que passou da franquia em algum mês.`));
 }
 
 async function telaUsuarios() {
@@ -1013,13 +1090,15 @@ async function telaUsuarios() {
       rotear();
     }),
   },
-  h('h2', {}, 'Novo usuário'),
+  h('h2', {}, 'Novo usuário da equipe'),
   h('div', { class: 'grade' },
     campo('Nome *', { name: 'nome', required: true }),
     campo('E-mail *', { type: 'email', name: 'email', required: true }),
     campo('Senha inicial *', { type: 'text', name: 'senha', required: true, minlength: 8, autocomplete: 'new-password' }),
-    campo('Perfil', { tag: 'select', name: 'papel', opcoes: [['cliente', 'Cliente (empresa)'], ['escritorio', 'Equipe do escritório']] }),
-    campo('Empresa (para clientes)', { tag: 'select', name: 'empresa_id', opcoes: [['', '—'], ...empresas.map((e) => [e.id, e.razao_social])] })),
+    opcoes.acesso_clientes
+      ? [campo('Perfil', { tag: 'select', name: 'papel', opcoes: [['escritorio', 'Equipe do escritório'], ['cliente', 'Cliente (empresa)']] }),
+        campo('Empresa (para clientes)', { tag: 'select', name: 'empresa_id', opcoes: [['', '—'], ...empresas.map((e) => [e.id, e.razao_social])] })]
+      : h('input', { type: 'hidden', name: 'papel', value: 'escritorio' })),
   h('div', { class: 'acoes' }, h('button', { type: 'submit' }, 'Criar usuário')));
 
   const alternarAtivo = async (u) => {
@@ -1080,27 +1159,340 @@ function telaSenha() {
 // Navegação
 // ---------------------------------------------------------------------------
 
+// Quando a opção "Outro" é escolhida num select, mostra um campo obrigatório para descrevê-la.
+function comOutro(rotuloSelect, nomeOutro, { valor = '', rotulo = 'Descreva' } = {}) {
+  const select = rotuloSelect.querySelector('select');
+  const campoOutro = campo(`${rotulo} *`, { name: nomeOutro, maxlength: 200, valor });
+  campoOutro.classList.add('campo-outro');
+  const input = campoOutro.querySelector('input');
+  const atualizar = () => {
+    const outro = select.value === 'outro';
+    campoOutro.hidden = !outro;
+    input.required = outro;
+    input.disabled = !outro;
+  };
+  select.addEventListener('change', atualizar);
+  atualizar();
+  return [rotuloSelect, campoOutro];
+}
+
+const rotuloComOutro = (mapa, valor, outro) => (valor === 'outro' && outro ? `Outro: ${outro}` : mapa[valor] ?? valor ?? '—');
+const reaisCampo = (centavos) => (centavos == null ? '' : (centavos / 100).toFixed(2).replace('.', ','));
+const nomeDoMes = (mes) => new Date(`${mes}-15T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+const diasEntre = (de, ate) => Math.round((Date.parse(ate) - Date.parse(de)) / 86400000);
+
+function descricaoPedido(s) {
+  if (!s.canal_pedido && !s.data_pedido) return h('span', { class: 'suave' }, '—');
+  const canal = s.canal_pedido ? rotuloComOutro(opcoes.canais, s.canal_pedido, s.canal_outro) : 'Pedido';
+  if (!s.data_pedido || !s.data_emissao) return canal;
+  const dias = diasEntre(s.data_pedido, s.data_emissao);
+  return [canal, h('div', { class: 'suave' }, dias === 0 ? 'emitida no mesmo dia' : `emitida em ${dias} dia(s)`)];
+}
+
+async function equipeDoEscritorio() {
+  return (await api('/api/usuarios')).filter((u) => u.papel === 'escritorio' && u.ativo);
+}
+
+// Lançamento em lote: vários XMLs de uma vez; cada um é lido e associado à empresa pelo CNPJ do emitente.
+async function abrirLoteXml() {
+  const empresas = (await api('/api/empresas')).filter((e) => e.ativo);
+  const inputArquivos = h('input', { type: 'file', multiple: true, accept: '.xml,.pdf' });
+  const resultado = h('div', {});
+  const dialogo = abrirDialogo(
+    h('h2', {}, 'Lançar notas em lote'),
+    h('p', { class: 'suave' },
+      'Selecione os XMLs das notas emitidas (por exemplo, todas as do dia). Cada XML é lido, a empresa é identificada pelo CNPJ ',
+      'do emitente e você confere antes de gravar. Se tiver os PDFs, selecione junto: cada PDF é anexado à nota de mesmo nome ou número.'),
+    h('label', {}, 'Arquivos', inputArquivos),
+    resultado,
+    h('div', { class: 'acoes' }, h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar')));
+  dialogo.classList.add('extra-largo');
+
+  inputArquivos.addEventListener('change', async () => {
+    const arquivos = [...inputArquivos.files];
+    const xmls = arquivos.filter(ehXml);
+    const pdfs = arquivos.filter((a) => !ehXml(a));
+    if (!xmls.length) {
+      resultado.replaceChildren(h('div', { class: 'alerta erro' }, 'Selecione ao menos um XML.'));
+      return;
+    }
+    resultado.replaceChildren(h('p', { class: 'suave' }, `Lendo ${xmls.length} XML(s)…`));
+    const itens = [];
+    for (const xml of xmls) {
+      const item = { xml, pdf: null, dados: null, empresa_id: '', avisos: [], erro: null };
+      try {
+        if (xml.size > 10 * 1024 * 1024) throw new Error('Arquivo maior que 10 MB.');
+        const r = await api('/api/notas/ler-xml', { metodo: 'POST', dados: { conteudo_base64: await lerArquivoBase64(xml) } });
+        item.dados = r.dados;
+        item.empresa_id = r.empresa_id ?? '';
+        item.avisos = r.avisos;
+        const base = xml.name.replace(/\.xml$/i, '').toLowerCase();
+        item.pdf = pdfs.find((p) => p.name.replace(/\.pdf$/i, '').toLowerCase() === base)
+          ?? pdfs.find((p) => r.dados.numero && p.name.includes(r.dados.numero)) ?? null;
+      } catch (err) {
+        item.erro = err.message;
+      }
+      itens.push(item);
+    }
+    mostrar(itens);
+  });
+
+  function mostrar(itens) {
+    const situacao = (item) => {
+      if (item.erro) return { rotulo: 'Não lido', cor: 'var(--rejeitada)', msg: item.erro };
+      if (item.avisos.some((a) => /já está registrada/.test(a))) return { rotulo: 'Já registrada', cor: 'var(--cancelada)', msg: item.avisos.join(' ') };
+      if (item.avisos.length) return { rotulo: 'Conferir', cor: 'var(--pendente)', msg: item.avisos.join(' ') };
+      return { rotulo: 'Pronta', cor: 'var(--emitida)', msg: null };
+    };
+    const botao = h('button', { type: 'button', class: 'destaque' });
+    const contar = () => {
+      const n = itens.filter((i) => i.marcar?.checked).length;
+      botao.textContent = `Registrar ${n} nota(s)`;
+      botao.disabled = n === 0;
+    };
+    const canal = comOutro(campo('Pedido recebido por (vale para todas)', {
+      tag: 'select', name: 'canal_pedido', valor: 'whatsapp', opcoes: [['', '—'], ...Object.entries(opcoes.canais)],
+    }), 'canal_outro', { rotulo: 'Qual canal?' });
+
+    const linhas = itens.map((item) => {
+      const sit = situacao(item);
+      item.marcar = item.erro ? null : h('input', { type: 'checkbox', checked: sit.rotulo !== 'Já registrada', onchange: contar });
+      item.selectEmpresa = h('select', {}, h('option', { value: '' }, 'Selecione…'),
+        empresas.map((e) => h('option', { value: e.id, selected: String(e.id) === String(item.empresa_id) }, e.razao_social)));
+      item.celulaSituacao = h('td', {}, h('span', { class: 'etiqueta', style: { '--cor': sit.cor } }, sit.rotulo),
+        sit.msg ? h('div', { class: 'suave' }, sit.msg) : null);
+      const d = item.dados ?? {};
+      return h('tr', {},
+        h('td', {}, item.marcar),
+        h('td', {}, item.xml.name, item.pdf ? h('div', { class: 'suave' }, `+ ${item.pdf.name}`) : null),
+        h('td', {}, item.erro ? '—' : item.selectEmpresa),
+        h('td', {}, d.numero ?? '—'),
+        h('td', {}, data(d.data_emissao) || '—'),
+        h('td', {}, d.tomador_nome ?? '—'),
+        h('td', { class: 'num' }, d.valor_centavos ? moeda(d.valor_centavos) : '—'),
+        item.celulaSituacao);
+    });
+
+    botao.addEventListener('click', async () => {
+      const escolhidos = itens.filter((i) => i.marcar?.checked);
+      const canalPedido = canal[0].querySelector('select').value;
+      const canalOutro = canal[1].querySelector('input').value;
+      if (canalPedido === 'outro' && !canalOutro.trim()) { avisar('Descreva o canal do pedido.', 'erro'); return; }
+      botao.disabled = true;
+      let ok = 0;
+      for (const item of escolhidos) {
+        const d = item.dados;
+        try {
+          if (!item.selectEmpresa.value) throw new Error('Selecione a empresa.');
+          const arquivos = [{ nome_arquivo: item.xml.name, tipo_mime: 'application/xml', conteudo_base64: await lerArquivoBase64(item.xml) }];
+          if (item.pdf) arquivos.push({ nome_arquivo: item.pdf.name, tipo_mime: 'application/pdf', conteudo_base64: await lerArquivoBase64(item.pdf) });
+          await api('/api/notas-emitidas', {
+            metodo: 'POST',
+            dados: {
+              empresa_id: item.selectEmpresa.value,
+              numero_nota: d.numero,
+              data_emissao: d.data_emissao,
+              valor: d.valor_centavos ? (d.valor_centavos / 100).toFixed(2) : '',
+              tipo_nota: d.tipo_nota,
+              tomador_documento: d.tomador_documento,
+              tomador_nome: d.tomador_nome?.slice(0, 200),
+              tomador_email: d.tomador_email,
+              descricao: d.descricao?.slice(0, 2000),
+              canal_pedido: canalPedido,
+              canal_outro: canalOutro,
+              arquivos,
+            },
+          });
+          ok++;
+          item.marcar.checked = false;
+          item.marcar.disabled = true;
+          item.celulaSituacao.replaceChildren(h('span', { class: 'etiqueta', style: { '--cor': 'var(--emitida)' } }, 'Registrada'));
+        } catch (err) {
+          item.celulaSituacao.replaceChildren(h('span', { class: 'etiqueta', style: { '--cor': 'var(--rejeitada)' } }, 'Erro'),
+            h('div', { class: 'suave' }, err.message));
+        }
+      }
+      const falhas = escolhidos.length - ok;
+      avisar(`${ok} nota(s) registrada(s)${falhas ? `, ${falhas} com erro (veja a lista)` : ''}.`, falhas ? 'erro' : 'sucesso');
+      contar();
+      if (!falhas) {
+        dialogo.close();
+        rotear();
+      }
+    });
+
+    const conta = (r) => itens.filter((i) => situacao(i).rotulo === r).length;
+    resultado.replaceChildren(
+      h('div', { class: 'alerta info' }, `${itens.length} XML(s): ${conta('Pronta')} pronta(s), ${conta('Conferir')} para conferir, `,
+        `${conta('Já registrada')} já registrada(s), ${conta('Não lido')} não lido(s).`),
+      h('div', { class: 'grade' }, canal),
+      h('div', { class: 'tabela tabela-rolagem' }, h('table', {},
+        h('thead', {}, h('tr', {}, ['', 'Arquivo', 'Empresa', 'Nº', 'Emissão', 'Tomador', 'Valor', 'Situação'].map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+        h('tbody', {}, linhas))),
+      h('div', { class: 'acoes' }, botao));
+    contar();
+  }
+}
+
+// Painel inicial do escritório: números do mês, franquia de cada cliente e atalhos de lançamento.
+async function telaPainelMes(query) {
+  const filtros = new URLSearchParams(query);
+  const mes = filtros.get('mes') || hoje().slice(0, 7);
+  const [ano, numMes] = mes.split('-').map(Number);
+  const ultimoDia = String(new Date(ano, numMes, 0).getDate()).padStart(2, '0');
+  const periodo = new URLSearchParams({ inicio: `${mes}-01`, fim: `${mes}-${ultimoDia}` });
+  if (filtros.get('responsavel_id')) periodo.set('responsavel_id', filtros.get('responsavel_id'));
+  const [rel, equipe] = await Promise.all([api(`/api/relatorio?${periodo}`), equipeDoEscritorio()]);
+
+  const comFranquia = rel.empresas
+    .filter((e) => e.plano_notas && e.notas_incluidas)
+    .map((e) => ({ ...e, uso: e.notas.total / e.notas_incluidas }))
+    .sort((a, b) => b.uso - a.uso);
+  const perto = comFranquia.filter((e) => e.uso >= 0.8).length;
+  const maisNotas = rel.empresas.filter((e) => e.notas.total > 0).sort((a, b) => b.notas.total - a.notas.total).slice(0, 8);
+
+  const indicador = (numero, rotulo, cor, href) => h('div', {
+    class: 'indicador', style: { '--cor': cor }, onclick: href ? () => { location.hash = href; } : null,
+  }, h('div', { class: 'numero' }, numero), h('div', { class: 'rotulo' }, rotulo));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, `Painel de ${nomeDoMes(mes)}`),
+      h('form', {
+        class: 'filtros', style: { marginBottom: 0 },
+        onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('', dadosFormulario(ev.target)); },
+        onchange: (ev) => ev.currentTarget.requestSubmit(),
+      },
+      campo('Mês', { type: 'month', name: 'mes', valor: mes }),
+      campo('Responsável', { tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'), opcoes: [['', 'Toda a equipe'], ...equipe.map((u) => [u.id, u.nome])] }))),
+    h('div', { class: 'acoes-rapidas' },
+      h('button', { class: 'acao-rapida destaque', onclick: () => abrirDialogoNota() },
+        h('strong', {}, 'Registrar nota'), h('span', {}, 'Pedido do WhatsApp emitido? Lance aqui')),
+      h('button', { class: 'acao-rapida', onclick: abrirLoteXml },
+        h('strong', {}, 'Lançar XMLs em lote'), h('span', {}, 'Várias notas de uma vez')),
+      h('button', { class: 'acao-rapida roxo', onclick: () => abrirDialogoOcorrencia('guia_recalculada') },
+        h('strong', {}, 'Guia recalculada'), h('span', {}, 'Com a guia anexada')),
+      h('button', { class: 'acao-rapida escuro', onclick: () => abrirDialogoOcorrencia('multa') },
+        h('strong', {}, 'Multa'), h('span', {}, 'Com a guia e o motivo'))),
+    h('div', { class: 'indicadores' },
+      indicador(rel.totais.notas, 'Notas emitidas no mês', 'var(--azul)', `#/notas?mes=${mes}`),
+      indicador(rel.totais.guias, 'Guias recalculadas', 'var(--roxo)', `#/ocorrencias?tipo=guia_recalculada&inicio=${periodo.get('inicio')}&fim=${periodo.get('fim')}`),
+      indicador(rel.totais.multas, `Multas · ${moeda(rel.totais.multas_valor_centavos)}`, 'var(--preto)', `#/ocorrencias?tipo=multa&inicio=${periodo.get('inicio')}&fim=${periodo.get('fim')}`),
+      indicador(perto, 'Clientes com 80% ou mais da franquia', 'var(--rosa)', null)),
+    h('div', { class: 'colunas' },
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Franquia de notas no mês'),
+        comFranquia.length
+          ? h('table', {},
+            h('thead', {}, h('tr', {}, h('th', {}, 'Cliente'), h('th', { class: 'num' }, 'Usadas'), h('th', {}, 'Uso'))),
+            h('tbody', {}, comFranquia.map((e) => {
+              const pct = Math.round(e.uso * 100);
+              const classe = e.uso > 1 ? 'estourou' : e.uso >= 0.8 ? 'alerta-80' : '';
+              return h('tr', {},
+                h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social), h('div', { class: 'suave' }, e.plano_nome ?? '')),
+                h('td', { class: 'num' }, `${e.notas.total} de ${e.notas_incluidas}`),
+                h('td', {}, h('div', { class: 'suave' }, `${pct}%${e.uso > 1 ? ' · acima da franquia' : ''}`),
+                  h('div', { class: `barra ${classe}` }, h('span', { style: { width: `${Math.min(100, pct)}%` } }))));
+            })))
+          : h('p', { class: 'suave' }, 'Nenhum cliente com franquia de notas cadastrada. Informe o plano em Empresas → Editar.')),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Quem mais pediu notas'),
+        maisNotas.length
+          ? h('table', {}, h('tbody', {}, maisNotas.map((e) => h('tr', {},
+            h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social),
+              h('div', { class: 'suave' }, e.plano_notas ? (e.plano_nome || 'Com plano') : 'Sem plano de notas')),
+            h('td', { class: 'num' }, h('strong', {}, e.notas.total))))))
+          : h('p', { class: 'suave' }, 'Nenhuma nota registrada neste mês ainda.'))));
+}
+
+async function telaNotas(query) {
+  const filtros = new URLSearchParams(query);
+  if (!filtros.has('mes')) filtros.set('mes', hoje().slice(0, 7));
+  const [lista, empresas, equipe] = await Promise.all([
+    api(`/api/solicitacoes?status=emitida&${filtros}`),
+    api('/api/empresas'),
+    equipeDoEscritorio(),
+  ]);
+  const total = lista.reduce((t, s) => t + (s.valor_centavos ?? 0), 0);
+
+  const excluir = async (s) => {
+    try {
+      if (await excluirNota(s)) rotear();
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+  };
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, 'Notas emitidas'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('a', { class: 'botao secundario', href: `/api/solicitacoes.csv?status=emitida&${filtros}` }, 'Exportar CSV'),
+        h('button', { class: 'secundario', onclick: abrirLoteXml }, 'Lançar XMLs em lote'),
+        h('button', { class: 'destaque', onclick: () => abrirDialogoNota() }, '+ Registrar nota'))),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        const d = dadosFormulario(ev.target);
+        const novo = new URLSearchParams();
+        for (const [k, v] of Object.entries(d)) if (v || k === 'mes') novo.set(k, v);
+        location.hash = `#/notas?${novo}`;
+      },
+    },
+    campo('Mês de emissão', { type: 'month', name: 'mes', valor: filtros.get('mes') }),
+    campo('Empresa', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todas'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+    campo('Responsável', { tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'), opcoes: [['', 'Todos'], ...equipe.map((u) => [u.id, u.nome])] }),
+    campo('Canal', { tag: 'select', name: 'canal', valor: filtros.get('canal'), opcoes: [['', 'Todos'], ...Object.entries(opcoes.canais)] }),
+    campo('Busca', { type: 'search', name: 'busca', valor: filtros.get('busca'), placeholder: 'Nº, tomador, descrição…' }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
+    h('a', { href: '#/notas?mes=', class: 'botao secundario' }, 'Ver todos os meses')),
+    lista.length
+      ? h('div', {},
+        h('p', { class: 'suave' }, `${lista.length} nota(s)${total ? ` · ${moeda(total)}` : ''}`),
+        h('div', { class: 'tabela' }, h('table', {},
+          h('thead', {}, h('tr', {}, ['Emissão', 'Empresa', 'Nº', 'Tomador', 'Valor', 'Pedido', 'Arquivos', ''].map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+          h('tbody', {}, lista.map((s) => h('tr', {},
+            h('td', {}, data(s.data_nota)),
+            h('td', {}, h('a', { href: `#/empresa/${s.empresa_id}` }, s.empresa_nome)),
+            h('td', {}, h('a', { href: `#/solicitacao/${s.id}` }, h('strong', {}, s.numero_nota ?? '—'))),
+            h('td', {}, s.tomador_nome ?? h('span', { class: 'suave' }, '—'), s.tomador_documento ? h('div', { class: 'suave' }, documento(s.tomador_documento)) : null),
+            h('td', { class: 'num' }, s.valor_centavos ? moeda(s.valor_centavos) : '—'),
+            h('td', {}, descricaoPedido(s)),
+            h('td', {}, s.anexos ? `${s.anexos} arquivo(s)` : h('span', { class: 'suave' }, 'sem anexo')),
+            h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0, flexWrap: 'nowrap' } },
+              h('button', { class: 'secundario', onclick: () => abrirEdicaoNota(s.id) }, 'Editar'),
+              h('button', { class: 'secundario', onclick: () => excluir(s) }, 'Excluir')))))))))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma nota neste filtro. Use "Registrar nota" ou "Lançar XMLs em lote".'));
+}
+
 async function carregarUsuario() {
   try {
     usuario = await api('/api/me');
+    opcoes = await api('/api/opcoes');
   } catch {
     usuario = null;
   }
 }
 
 function montarMenu(caminho) {
-  const itens = [['#/', 'Solicitações'], ['#/nova', 'Nova solicitação']];
-  if (usuario.papel === 'escritorio') {
-    itens.push(['#/ocorrencias', 'Ocorrências'], ['#/relatorio', 'Relatório'], ['#/empresas', 'Empresas'], ['#/usuarios', 'Usuários']);
-  }
-  document.getElementById('menu').replaceChildren(...itens.map(([href, texto]) => h('a', {
-    href, class: (href === '#/' ? caminho === '/' || caminho.startsWith('/solicitacao')
-      : `#${caminho}` === href || (href === '#/empresas' && caminho.startsWith('/empresa/'))) ? 'ativo' : null,
-  }, texto)));
+  const itens = usuario.papel === 'escritorio'
+    ? [['#/', 'Painel'], ['#/notas', 'Notas'], ['#/ocorrencias', 'Ocorrências'], ['#/relatorio', 'Relatório'],
+      ['#/empresas', 'Empresas'], ['#/usuarios', 'Usuários']]
+    : [['#/', 'Minhas solicitações'], ['#/nova', 'Nova solicitação']];
+  const ativo = (href) => {
+    if (href === '#/') return caminho === '/' || (usuario.papel !== 'escritorio' && caminho.startsWith('/solicitacao'));
+    if (href === '#/notas') return caminho === '/notas' || caminho.startsWith('/solicitacao');
+    if (href === '#/empresas') return caminho === '/empresas' || caminho.startsWith('/empresa/');
+    return `#${caminho}` === href;
+  };
+  document.getElementById('menu').replaceChildren(...itens.map(([href, texto]) => h('a', { href, class: ativo(href) ? 'ativo' : null }, texto)));
   document.getElementById('nome-usuario').textContent = usuario.empresa
     ? `${usuario.nome} · ${usuario.empresa.razao_social}`
-    : `${usuario.nome} · Escritório`;
+    : usuario.nome;
+  document.body.classList.remove('tela-login');
   document.getElementById('topo').hidden = false;
+  document.getElementById('faixa-marca').hidden = false;
 }
 
 async function rotear() {
@@ -1108,19 +1500,21 @@ async function rotear() {
   if (!usuario) await carregarUsuario();
   if (!usuario) return telaLogin();
   montarMenu(caminho || '/');
+  const escritorio = usuario.papel === 'escritorio';
 
   try {
     let m;
-    if (!caminho || caminho === '/') return await telaPainel(query);
+    if (!caminho || caminho === '/') return escritorio ? await telaPainelMes(query) : await telaSolicitacoesCliente(query);
     if (caminho === '/login') { location.hash = '#/'; return; }
     if (caminho === '/nova') return await telaFormulario(null);
     if ((m = caminho.match(/^\/solicitacao\/(\d+)\/editar$/))) return await telaFormulario(m[1]);
     if ((m = caminho.match(/^\/solicitacao\/(\d+)$/))) return await telaDetalhe(m[1]);
-    if (caminho === '/empresas' && usuario.papel === 'escritorio') return await telaEmpresas();
-    if (caminho === '/usuarios' && usuario.papel === 'escritorio') return await telaUsuarios();
-    if (caminho === '/ocorrencias' && usuario.papel === 'escritorio') return await telaOcorrencias(query);
-    if (caminho === '/relatorio' && usuario.papel === 'escritorio') return await telaRelatorio(query);
-    if ((m = caminho.match(/^\/empresa\/(\d+)$/)) && usuario.papel === 'escritorio') return await telaPerfilEmpresa(m[1], query);
+    if (caminho === '/notas' && escritorio) return await telaNotas(query);
+    if (caminho === '/empresas' && escritorio) return await telaEmpresas();
+    if (caminho === '/usuarios' && escritorio) return await telaUsuarios();
+    if (caminho === '/ocorrencias' && escritorio) return await telaOcorrencias(query);
+    if (caminho === '/relatorio' && escritorio) return await telaRelatorio(query);
+    if ((m = caminho.match(/^\/empresa\/(\d+)$/)) && escritorio) return await telaPerfilEmpresa(m[1], query);
     if (caminho === '/senha') return telaSenha();
     renderizar(h('div', { class: 'cartao vazio' }, 'Página não encontrada. ', h('a', { href: '#/' }, 'Voltar ao início')));
   } catch (err) {

@@ -20,7 +20,7 @@ test.before(async () => {
   db = abrirBanco(':memory:');
   db.prepare("INSERT INTO usuarios (nome, email, senha_hash, papel) VALUES ('Admin', 'admin@x.com', ?, 'escritorio')")
     .run(gerarHash('senha-admin'));
-  servidor = http.createServer(criarApp({ db, pastaArquivos: pasta }));
+  servidor = http.createServer(criarApp({ db, pastaArquivos: pasta, acessoClientes: true }));
   await new Promise((r) => servidor.listen(0, r));
   base = `http://127.0.0.1:${servidor.address().port}`;
 });
@@ -142,7 +142,7 @@ test('plano na empresa, ocorrências e relatório do trimestre', async () => {
   assert.equal(r.status, 200);
   const linhas = r.corpo.replace(/^﻿/, '').split('\r\n');
   assert.match(linhas[0], /Notas 10\/2026;Notas 11\/2026;Notas 12\/2026/);
-  assert.match(r.corpo, /Com Plano SA;11444777000161;Sim;Essencial;5;;7;3;0;10;3,3;1;0;0;0;2;650,75;1;1;/);
+  assert.match(r.corpo, /Com Plano SA;11444777000161;;Sim;Essencial;5;;7;3;0;10;3,3;1;0;0;0;2;650,75;1;1;12;;/);
 
   // Período inválido
   assert.equal((await admin('GET', '/api/relatorio?inicio=2026-12-01&fim=2026-10-01')).status, 400);

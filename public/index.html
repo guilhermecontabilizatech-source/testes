@@ -3,12 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Solicitações de Notas Fiscais</title>
+  <title>ContabilizaTech · Gestão</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="preload" href="/fontes/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/fontes/comfortaa-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header id="topo" hidden>
-    <div class="marca">📄 Notas Fiscais</div>
+    <a href="#/" class="marca" aria-label="ContabilizaTech, início">
+      <img src="/marca/logo.webp" alt="ContabilizaTech" width="184" height="32">
+    </a>
     <nav id="menu"></nav>
     <div class="usuario">
       <span id="nome-usuario"></span>
@@ -16,6 +21,7 @@
       <button id="sair" class="link">Sair</button>
     </div>
   </header>
+  <div id="faixa-marca" class="faixa-marca" hidden></div>
   <main id="conteudo"></main>
   <div id="aviso" role="status" hidden></div>
   <script src="/app.js"></script>

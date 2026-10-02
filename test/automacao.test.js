@@ -151,8 +151,8 @@ test('registro de nota emitida pelo XML atualiza solicitação e relatório', as
   r = await admin('POST', '/api/notas/ler-xml', { conteudo_base64: Buffer.from('<x/>').toString('base64') });
   assert.equal(r.status, 422);
 
-  // Sem arquivos não registra.
-  r = await admin('POST', '/api/notas-emitidas', { empresa_id: empresaId, numero_nota: '87', data_emissao: '2026-10-20', solicitacao_id: pedido });
+  // Número da nota é obrigatório.
+  r = await admin('POST', '/api/notas-emitidas', { empresa_id: empresaId, data_emissao: '2026-10-20', solicitacao_id: pedido });
   assert.equal(r.status, 400);
 
   // Vincula à solicitação aberta.

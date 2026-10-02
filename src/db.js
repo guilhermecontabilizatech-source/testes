@@ -4,6 +4,34 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
+// Solicitações guardam as notas fiscais. Tomador, descrição e valor são opcionais porque a
+// nota pode ser registrada pelo escritório só com número e data de emissão.
+const tabelaSolicitacoes = (nome) => `CREATE TABLE IF NOT EXISTS ${nome} (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
+  criado_por INTEGER NOT NULL REFERENCES usuarios(id),
+  tipo_nota TEXT CHECK (tipo_nota IS NULL OR tipo_nota IN ('NFS-e', 'NF-e')),
+  tomador_documento TEXT,
+  tomador_nome TEXT,
+  tomador_email TEXT,
+  tomador_endereco TEXT,
+  descricao TEXT,
+  valor_centavos INTEGER CHECK (valor_centavos IS NULL OR valor_centavos > 0),
+  data_competencia TEXT,
+  observacoes TEXT,
+  status TEXT NOT NULL DEFAULT 'pendente'
+    CHECK (status IN ('pendente', 'em_emissao', 'emitida', 'rejeitada', 'cancelada')),
+  numero_nota TEXT,
+  motivo_rejeicao TEXT,
+  responsavel_id INTEGER REFERENCES usuarios(id),
+  criado_em TEXT NOT NULL DEFAULT (datetime('now')),
+  atualizado_em TEXT NOT NULL DEFAULT (datetime('now')),
+  data_emissao TEXT,
+  canal_pedido TEXT,
+  canal_outro TEXT,
+  data_pedido TEXT
+);`;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS empresas (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,27 +61,7 @@ CREATE TABLE IF NOT EXISTS sessoes (
   expira_em TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS solicitacoes (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  empresa_id INTEGER NOT NULL REFERENCES empresas(id),
-  criado_por INTEGER NOT NULL REFERENCES usuarios(id),
-  tipo_nota TEXT NOT NULL CHECK (tipo_nota IN ('NFS-e', 'NF-e')),
-  tomador_documento TEXT NOT NULL,
-  tomador_nome TEXT NOT NULL,
-  tomador_email TEXT,
-  tomador_endereco TEXT,
-  descricao TEXT NOT NULL,
-  valor_centavos INTEGER NOT NULL CHECK (valor_centavos > 0),
-  data_competencia TEXT NOT NULL,
-  observacoes TEXT,
-  status TEXT NOT NULL DEFAULT 'pendente'
-    CHECK (status IN ('pendente', 'em_emissao', 'emitida', 'rejeitada', 'cancelada')),
-  numero_nota TEXT,
-  motivo_rejeicao TEXT,
-  responsavel_id INTEGER REFERENCES usuarios(id),
-  criado_em TEXT NOT NULL DEFAULT (datetime('now')),
-  atualizado_em TEXT NOT NULL DEFAULT (datetime('now'))
-);
+${tabelaSolicitacoes('solicitacoes')}
 CREATE INDEX IF NOT EXISTS idx_solicitacoes_empresa ON solicitacoes(empresa_id);
 CREATE INDEX IF NOT EXISTS idx_solicitacoes_status ON solicitacoes(status);
 
@@ -111,17 +119,44 @@ const COLUNAS_NOVAS = {
     plano_nome: 'TEXT',
     notas_incluidas: 'INTEGER',
     honorario_centavos: 'INTEGER',
-  },
-  solicitacoes: {
-    data_emissao: 'TEXT',
+    responsavel_id: 'INTEGER REFERENCES usuarios(id)',
   },
   ocorrencias: {
     tributo: 'TEXT',
     competencia: 'TEXT',
+    motivo_outro: 'TEXT',
+    causa_outro: 'TEXT',
+    tributo_outro: 'TEXT',
   },
 };
 
+// Bancos criados antes da versão "notas como registro" têm campos obrigatórios demais em
+// solicitacoes; o SQLite não altera restrições, então a tabela é recriada (procedimento
+// recomendado pela documentação do SQLite) preservando todos os dados.
+function recriarSolicitacoes(db) {
+  const colunas = db.prepare('PRAGMA table_info(solicitacoes)').all();
+  if (!colunas.length || colunas.some((c) => c.name === 'canal_pedido')) return;
+  const comuns = colunas.map((c) => c.name).join(', ');
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(tabelaSolicitacoes('solicitacoes_nova'));
+    db.exec(`INSERT INTO solicitacoes_nova (${comuns}) SELECT ${comuns} FROM solicitacoes`);
+    db.exec('DROP TABLE solicitacoes');
+    db.exec('ALTER TABLE solicitacoes_nova RENAME TO solicitacoes');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_solicitacoes_empresa ON solicitacoes(empresa_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_solicitacoes_status ON solicitacoes(status)');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 function migrar(db) {
+  recriarSolicitacoes(db);
   for (const [tabela, colunas] of Object.entries(COLUNAS_NOVAS)) {
     const existentes = new Set(db.prepare(`PRAGMA table_info(${tabela})`).all().map((c) => c.name));
     for (const [coluna, definicao] of Object.entries(colunas)) {

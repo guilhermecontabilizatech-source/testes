@@ -6,7 +6,7 @@ const auth = require('./auth');
 const { transacao } = require('./db');
 const { paraCsv } = require('./csv');
 const { registrarRotasOperacionais } = require('./operacional');
-const { prepararArquivo, prepararArquivos, gravarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
+const { prepararArquivo, prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 const { lerXmlNota } = require('./xmlNota');
 const { criarLimitador } = require('./limitador');
 const importacao = require('./importacao');
@@ -17,7 +17,9 @@ const {
   emailValido,
   texto,
   validarSolicitacao,
+  validarNota,
   valorParaCentavos,
+  CANAIS_PEDIDO,
 } = require('./validacao');
 
 const LIMITE_CORPO = 30 * 1024 * 1024; // anexos chegam em base64 (até 10 MB cada)
@@ -27,6 +29,10 @@ const MIME_ESTATICO = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 // Transições de status permitidas e quem pode realizá-las.
@@ -53,7 +59,13 @@ function hojeBrasilia() {
   return new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = false, limitador = criarLimitador() }) {
+// Data de referência de uma nota: a emissão; para pedidos ainda não emitidos, o dia do pedido
+// (criado_em fica em UTC; -3h mantém o dia no horário de Brasília).
+const DATA_NOTA = "COALESCE(s.data_emissao, date(s.criado_em, '-3 hours'))";
+
+function criarApp({
+  db, pastaArquivos, cookieSeguro = false, confiarProxy = false, limitador = criarLimitador(), acessoClientes = false,
+}) {
   fs.mkdirSync(pastaArquivos, { recursive: true });
 
   const rotas = [];
@@ -130,16 +142,24 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
       condicoes.push('s.status = ?');
       params.push(query.get('status'));
     }
+    if (query.get('responsavel_id')) {
+      condicoes.push('e.responsavel_id = ?');
+      params.push(Number(query.get('responsavel_id')));
+    }
+    if (query.get('canal')) {
+      condicoes.push('s.canal_pedido = ?');
+      params.push(query.get('canal'));
+    }
     const mes = query.get('mes');
     if (mes && /^\d{4}-\d{2}$/.test(mes)) {
-      condicoes.push("substr(s.data_competencia, 1, 7) = ?");
+      condicoes.push(`substr(${DATA_NOTA}, 1, 7) = ?`);
       params.push(mes);
     }
-    // Período pela data do pedido, no horário de Brasília (mesma regra do relatório).
+    // Período pela data da nota (mesma regra do relatório).
     for (const [param, operador] of [['inicio', '>='], ['fim', '<=']]) {
       const valor = query.get(param);
       if (valor && /^\d{4}-\d{2}-\d{2}$/.test(valor)) {
-        condicoes.push(`date(s.criado_em, '-3 hours') ${operador} ?`);
+        condicoes.push(`${DATA_NOTA} ${operador} ?`);
         params.push(valor);
       }
     }
@@ -158,12 +178,13 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
     return db.prepare(`
       SELECT s.id, s.empresa_id, e.razao_social AS empresa_nome, s.tipo_nota, s.tomador_nome,
              s.tomador_documento, s.valor_centavos, s.data_competencia, s.status, s.numero_nota,
-             s.data_emissao, s.criado_em, s.atualizado_em,
+             s.data_emissao, s.canal_pedido, s.canal_outro, s.data_pedido, s.criado_em, s.atualizado_em,
+             ${DATA_NOTA} AS data_nota,
              (SELECT COUNT(*) FROM anexos a WHERE a.solicitacao_id = s.id) AS anexos
       FROM solicitacoes s JOIN empresas e ON e.id = s.empresa_id
       ${where}
-      ORDER BY CASE s.status WHEN 'pendente' THEN 0 WHEN 'em_emissao' THEN 1 ELSE 2 END, s.criado_em DESC, s.id DESC
-      LIMIT 500
+      ORDER BY CASE s.status WHEN 'pendente' THEN 0 WHEN 'em_emissao' THEN 1 ELSE 2 END, data_nota DESC, s.id DESC
+      LIMIT 1000
     `).all(...params).map((linha) => ({ ...linha }));
   }
 
@@ -186,6 +207,9 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
       limitador.falhou(ip, email);
       throw new ErroValidacao('E-mail ou senha incorretos.', 401);
     }
+    if (usuario.papel === 'cliente' && !acessoClientes) {
+      throw new ErroValidacao('O acesso de clientes está desativado. Fale com o escritório.', 403);
+    }
     limitador.acertou(ip, email);
     const token = auth.criarSessao(db, usuario.id);
     responder(200, { ok: true }, { 'Set-Cookie': auth.cookieSessao(token, { seguro: cookieSeguro }) });
@@ -195,6 +219,8 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
     auth.encerrarSessao(db, token);
     responder(200, { ok: true }, { 'Set-Cookie': auth.cookieSessao('', { seguro: cookieSeguro }) });
   });
+
+  rota('GET', '/api/opcoes', () => ({ canais: CANAIS_PEDIDO, acesso_clientes: acessoClientes }));
 
   rota('GET', '/api/me', ({ usuario }) => {
     const empresa = usuario.empresa_id
@@ -217,7 +243,7 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
   // ---------- empresas (clientes do escritório) ----------
 
   rota('GET', '/api/empresas', () => db.prepare(`
-    SELECT e.*,
+    SELECT e.*, (SELECT nome FROM usuarios r WHERE r.id = e.responsavel_id) AS responsavel_nome,
       (SELECT COUNT(*) FROM solicitacoes s WHERE s.empresa_id = e.id AND s.status IN ('pendente','em_emissao')) AS abertas,
       (SELECT COUNT(*) FROM usuarios u WHERE u.empresa_id = e.id) AS usuarios
     FROM empresas e ORDER BY e.razao_social
@@ -249,10 +275,21 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
       plano_nome: texto('Nome do plano', corpo.plano_nome, { max: 100 }),
       notas_incluidas: notasIncluidas,
       honorario_centavos: honorario,
+      responsavel_id: validarResponsavel(corpo.responsavel_id),
     };
   }
 
-  const CAMPOS_EMPRESA = ['razao_social', 'cnpj', 'email', 'telefone', 'ativo', 'plano_notas', 'plano_nome', 'notas_incluidas', 'honorario_centavos'];
+  function validarResponsavel(valor) {
+    if (valor === undefined || valor === null || valor === '') return null;
+    const id = Number(valor);
+    if (!db.prepare("SELECT 1 FROM usuarios WHERE id = ? AND papel = 'escritorio'").get(id)) {
+      throw new ErroValidacao('Responsável inválido: escolha alguém da equipe do escritório.');
+    }
+    return id;
+  }
+
+  const CAMPOS_EMPRESA = ['razao_social', 'cnpj', 'email', 'telefone', 'ativo', 'plano_notas', 'plano_nome', 'notas_incluidas',
+    'honorario_centavos', 'responsavel_id'];
 
   function erroUnico(err, mensagem) {
     if (String(err.message).includes('UNIQUE')) throw new ErroValidacao(mensagem, 409);
@@ -368,7 +405,8 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
     const nome = texto('Nome', corpo.nome, { obrigatorio: true, max: 200 });
     const email = texto('E-mail', corpo.email, { obrigatorio: true, max: 200 });
     if (!emailValido(email)) throw new ErroValidacao('E-mail inválido.');
-    const papel = corpo.papel === 'escritorio' ? 'escritorio' : 'cliente';
+    const papel = corpo.papel === 'cliente' ? 'cliente' : 'escritorio';
+    if (papel === 'cliente' && !acessoClientes) throw new ErroValidacao('O acesso de clientes está desativado.');
     let empresaId = null;
     if (papel === 'cliente') {
       empresaId = Number(corpo.empresa_id);
@@ -410,7 +448,7 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
     const { where, params } = filtrosSolicitacoes(usuario, query);
     const linhas = db.prepare(`
       SELECT s.status, COUNT(*) AS quantidade, SUM(s.valor_centavos) AS total_centavos
-      FROM solicitacoes s ${where} GROUP BY s.status
+      FROM solicitacoes s JOIN empresas e ON e.id = s.empresa_id ${where} GROUP BY s.status
     `).all(...params);
     const resumo = {};
     for (const status of Object.keys(ROTULOS_STATUS)) resumo[status] = { quantidade: 0, total_centavos: 0 };
@@ -422,15 +460,17 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
 
   rota('GET', '/api/solicitacoes.csv', ({ usuario, query, responderBruto }) => {
     const linhas = listarSolicitacoes(usuario, query);
-    const cabecalho = ['ID', 'Empresa', 'Tipo', 'Tomador', 'CPF/CNPJ tomador', 'Valor', 'Competência', 'Status', 'Nº nota', 'Criada em'];
+    const cabecalho = ['ID', 'Empresa', 'Nº nota', 'Emissão', 'Tipo', 'Tomador', 'CPF/CNPJ tomador', 'Valor',
+      'Pedido recebido por', 'Data do pedido', 'Situação', 'Arquivos'];
     const csv = paraCsv([cabecalho, ...linhas.map((s) => [
-      s.id, s.empresa_nome, s.tipo_nota, s.tomador_nome, s.tomador_documento,
-      (s.valor_centavos / 100).toFixed(2).replace('.', ','), s.data_competencia,
-      ROTULOS_STATUS[s.status], s.numero_nota, s.criado_em,
+      s.id, s.empresa_nome, s.numero_nota, s.data_nota, s.tipo_nota, s.tomador_nome, s.tomador_documento,
+      s.valor_centavos == null ? '' : (s.valor_centavos / 100).toFixed(2).replace('.', ','),
+      s.canal_pedido === 'outro' ? `Outro: ${s.canal_outro ?? ''}` : CANAIS_PEDIDO[s.canal_pedido] ?? '',
+      s.data_pedido, ROTULOS_STATUS[s.status], s.anexos,
     ])]);
     responderBruto(200, csv, {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': 'attachment; filename="solicitacoes.csv"',
+      'Content-Disposition': 'attachment; filename="notas.csv"',
     });
   });
 
@@ -591,30 +631,23 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
   rota('GET', '/api/empresas/:id/solicitacoes-abertas', ({ params }) => solicitacoesAbertas(params.id, {}).lista,
     { papel: 'escritorio' });
 
+  // Nota emitida registrada pelo escritório (pedido recebido por WhatsApp, e-mail etc.).
+  // Pode atender uma solicitação aberta (quando o acesso de clientes está ligado) ou ser nova.
   rota('POST', '/api/notas-emitidas', ({ corpo, usuario }) => {
-    const empresa = db.prepare('SELECT id, ativo FROM empresas WHERE id = ?').get(Number(corpo.empresa_id));
+    const empresa = db.prepare('SELECT id FROM empresas WHERE id = ?').get(Number(corpo.empresa_id));
     if (!empresa) throw new ErroValidacao('Selecione a empresa.');
-    const numero = texto('Número da nota', corpo.numero_nota, { obrigatorio: true, max: 50 });
-    const dataEmissao = String(corpo.data_emissao ?? '');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dataEmissao) || Number.isNaN(Date.parse(dataEmissao))) {
-      throw new ErroValidacao('Data de emissão inválida.');
-    }
+    const nota = validarNota(corpo);
     const preparados = prepararArquivos(corpo.arquivos);
-    if (!preparados.length) throw new ErroValidacao('Anexe o PDF e/ou o XML da nota.');
 
     let vinculada = null;
-    let dados = null;
     if (corpo.solicitacao_id) {
       vinculada = db.prepare('SELECT * FROM solicitacoes WHERE id = ? AND empresa_id = ?').get(Number(corpo.solicitacao_id), empresa.id);
       if (!vinculada) throw new ErroValidacao('Solicitação não encontrada para esta empresa.', 404);
       if (!['pendente', 'em_emissao'].includes(vinculada.status)) {
         throw new ErroValidacao(`A solicitação #${vinculada.id} não está aberta.`, 409);
       }
-      verificarNotaDuplicada(empresa.id, numero, vinculada.id);
-    } else {
-      dados = validarSolicitacao({ ...corpo, data_competencia: corpo.data_competencia || dataEmissao });
-      verificarNotaDuplicada(empresa.id, numero, null);
     }
+    verificarNotaDuplicada(empresa.id, nota.numero_nota, vinculada?.id ?? null);
 
     const { gravados, desfazer } = gravarArquivos(pastaArquivos, preparados);
     try {
@@ -624,27 +657,26 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
           solicitacaoId = vinculada.id;
           db.prepare(`
             UPDATE solicitacoes SET status = 'emitida', numero_nota = ?, data_emissao = ?,
+              canal_pedido = COALESCE(?, canal_pedido), canal_outro = COALESCE(?, canal_outro),
               responsavel_id = COALESCE(responsavel_id, ?), atualizado_em = datetime('now')
             WHERE id = ?
-          `).run(numero, dataEmissao, usuario.id, solicitacaoId);
-          const valorNota = valorParaCentavos(corpo.valor);
-          const diferenca = Number.isInteger(valorNota) && valorNota !== vinculada.valor_centavos
-            ? ` Atenção: valor da nota (${reaisTexto(valorNota)}) diferente do solicitado (${reaisTexto(vinculada.valor_centavos)}).`
+          `).run(nota.numero_nota, nota.data_emissao, nota.canal_pedido, nota.canal_outro, usuario.id, solicitacaoId);
+          const diferenca = nota.valor_centavos && vinculada.valor_centavos && nota.valor_centavos !== vinculada.valor_centavos
+            ? ` Atenção: valor da nota (${reaisTexto(nota.valor_centavos)}) diferente do solicitado (${reaisTexto(vinculada.valor_centavos)}).`
             : '';
-          registrarHistorico(solicitacaoId, usuario.id, 'status:emitida', `Nota nº ${numero} emitida.${diferenca}`);
+          registrarHistorico(solicitacaoId, usuario.id, 'status:emitida', `Nota nº ${nota.numero_nota} emitida.${diferenca}`);
         } else {
-          // A data do pedido passa a ser a da emissão (12h em Brasília) para contar no mês certo.
           const r = db.prepare(`
             INSERT INTO solicitacoes (empresa_id, criado_por, tipo_nota, tomador_documento, tomador_nome, tomador_email,
-              tomador_endereco, descricao, valor_centavos, data_competencia, observacoes, status, numero_nota,
-              data_emissao, responsavel_id, criado_em)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'emitida', ?, ?, ?, ?)
-          `).run(empresa.id, usuario.id, dados.tipo_nota, dados.tomador_documento, dados.tomador_nome, dados.tomador_email,
-            dados.tomador_endereco, dados.descricao, dados.valor_centavos, dados.data_competencia, dados.observacoes,
-            numero, dataEmissao, usuario.id, `${dataEmissao} 15:00:00`);
+              descricao, valor_centavos, data_competencia, status, numero_nota, data_emissao, responsavel_id,
+              canal_pedido, canal_outro, data_pedido)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'emitida', ?, ?, ?, ?, ?, ?)
+          `).run(empresa.id, usuario.id, nota.tipo_nota, nota.tomador_documento, nota.tomador_nome, nota.tomador_email,
+            nota.descricao, nota.valor_centavos, nota.data_emissao, nota.numero_nota, nota.data_emissao, usuario.id,
+            nota.canal_pedido, nota.canal_outro, nota.data_pedido);
           solicitacaoId = Number(r.lastInsertRowid);
-          registrarHistorico(solicitacaoId, usuario.id, 'criada', 'Nota registrada pelo escritório no perfil do cliente.');
-          registrarHistorico(solicitacaoId, usuario.id, 'status:emitida', `Nota nº ${numero} emitida.`);
+          const canal = nota.canal_pedido ? ` Pedido recebido por ${nota.canal_outro ?? CANAIS_PEDIDO[nota.canal_pedido]}.` : '';
+          registrarHistorico(solicitacaoId, usuario.id, 'status:emitida', `Nota nº ${nota.numero_nota} registrada.${canal}`);
         }
         inserirAnexos(solicitacaoId, gravados, usuario.id);
         return solicitacaoId;
@@ -654,6 +686,32 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
       desfazer();
       throw err;
     }
+  }, { papel: 'escritorio' });
+
+  rota('PUT', '/api/notas-emitidas/:id', ({ corpo, params, usuario }) => {
+    const atual = db.prepare("SELECT * FROM solicitacoes WHERE id = ? AND status = 'emitida'").get(params.id);
+    if (!atual) throw new ErroValidacao('Nota não encontrada.', 404);
+    const nota = validarNota(corpo);
+    verificarNotaDuplicada(atual.empresa_id, nota.numero_nota, atual.id);
+    transacao(db, () => {
+      db.prepare(`
+        UPDATE solicitacoes SET numero_nota = ?, data_emissao = ?, tipo_nota = ?, tomador_documento = ?, tomador_nome = ?,
+          tomador_email = ?, descricao = ?, valor_centavos = ?, canal_pedido = ?, canal_outro = ?, data_pedido = ?,
+          atualizado_em = datetime('now')
+        WHERE id = ?
+      `).run(nota.numero_nota, nota.data_emissao, nota.tipo_nota, nota.tomador_documento, nota.tomador_nome,
+        nota.tomador_email, nota.descricao, nota.valor_centavos, nota.canal_pedido, nota.canal_outro, nota.data_pedido, atual.id);
+      registrarHistorico(atual.id, usuario.id, 'editada', 'Dados da nota alterados.');
+    });
+    return { ok: true };
+  }, { papel: 'escritorio' });
+
+  rota('DELETE', '/api/solicitacoes/:id', ({ params }) => {
+    const arquivos = db.prepare('SELECT arquivo FROM anexos WHERE solicitacao_id = ?').all(params.id);
+    const r = db.prepare('DELETE FROM solicitacoes WHERE id = ?').run(params.id);
+    if (!r.changes) throw new ErroValidacao('Nota não encontrada.', 404);
+    apagarArquivos(pastaArquivos, arquivos.map((a) => a.arquivo));
+    return { ok: true };
   }, { papel: 'escritorio' });
 
   // ---------- controle operacional (ocorrências e relatório) ----------
@@ -735,7 +793,8 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
       if (!r) throw new ErroValidacao('Rota não encontrada.', 404);
 
       const token = auth.lerCookies(req.headers.cookie)[auth.NOME_COOKIE];
-      const usuario = auth.usuarioDaSessao(db, token);
+      let usuario = auth.usuarioDaSessao(db, token);
+      if (usuario?.papel === 'cliente' && !acessoClientes) usuario = null;
       if (!r.publica && !usuario) throw new ErroValidacao('Faça login para continuar.', 401);
       if (r.papel && usuario.papel !== r.papel) throw new ErroValidacao('Acesso restrito ao escritório.', 403);
 

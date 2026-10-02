@@ -1,6 +1,6 @@
 'use strict';
 
-const { ErroValidacao, texto, valorParaCentavos } = require('./validacao');
+const { ErroValidacao, texto, valorParaCentavos, CANAIS_PEDIDO } = require('./validacao');
 const { paraCsv, reais } = require('./csv');
 const { transacao } = require('./db');
 const { prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
@@ -78,18 +78,31 @@ function validarOcorrencia(db, corpo) {
   const competencia = corpo.competencia || null;
   if (competencia && !/^\d{4}-(0[1-9]|1[0-2])$/.test(competencia)) throw new ErroValidacao('Competência inválida (use AAAA-MM).');
 
+  // Toda opção "Outro" exige descrever o que é.
+  const outro = (campo, escolhido, rotulo) => (escolhido === 'outro'
+    ? texto(`Descrição de "${rotulo}"`, corpo[campo], { obrigatorio: true, max: 200 })
+    : null);
+
   return {
     empresa_id: empresaId,
     tipo,
     tributo,
+    tributo_outro: outro('tributo_outro', tributo, 'Tributo: outro'),
     competencia,
     data,
     motivo: corpo.motivo,
+    motivo_outro: outro('motivo_outro', corpo.motivo, 'Motivo: outro'),
     causa: corpo.causa,
+    causa_outro: outro('causa_outro', corpo.causa, 'Causa: outro'),
     valor_centavos: valor,
     descricao: texto('Descrição', corpo.descricao, { max: 500 }),
   };
 }
+
+const CAMPOS_OCORRENCIA = ['empresa_id', 'tipo', 'tributo', 'tributo_outro', 'competencia', 'data', 'motivo', 'motivo_outro',
+  'causa', 'causa_outro', 'valor_centavos', 'descricao'];
+
+const normalizarTexto = (t) => String(t ?? '').trim().toLowerCase();
 
 function lerPeriodo(query) {
   const inicio = query.get('inicio') || PERIODO_PADRAO.inicio;
@@ -108,29 +121,34 @@ function lerPeriodo(query) {
     if (mes > 12) { mes = 1; ano += 1; }
   }
   const empresaId = query.get('empresa_id') ? Number(query.get('empresa_id')) : null;
-  return { inicio, fim, meses, empresaId };
+  const responsavelId = query.get('responsavel_id') ? Number(query.get('responsavel_id')) : null;
+  return { inicio, fim, meses, empresaId, responsavelId };
 }
 
 // Consolida, por empresa, notas solicitadas, guias recalculadas e multas no período.
-function calcularRelatorio(db, { inicio, fim, meses, empresaId = null }) {
+function calcularRelatorio(db, { inicio, fim, meses, empresaId = null, responsavelId = null }) {
   const empresas = db.prepare(`
-    SELECT id, razao_social, cnpj, ativo, plano_notas, plano_nome, notas_incluidas, honorario_centavos
-    FROM empresas WHERE ? IS NULL OR id = ? ORDER BY razao_social
-  `).all(empresaId, empresaId);
+    SELECT e.id, e.razao_social, e.cnpj, e.ativo, e.plano_notas, e.plano_nome, e.notas_incluidas, e.honorario_centavos,
+           e.responsavel_id, u.nome AS responsavel_nome
+    FROM empresas e LEFT JOIN usuarios u ON u.id = e.responsavel_id
+    WHERE (? IS NULL OR e.id = ?) AND (? IS NULL OR e.responsavel_id = ?)
+    ORDER BY e.razao_social
+  `).all(empresaId, empresaId, responsavelId, responsavelId);
 
-  // Datas de criação ficam em UTC; o deslocamento de -3h mantém o mês no horário de Brasília.
+  // Cada nota conta no mês da emissão; pedidos ainda não emitidos, no dia do pedido
+  // (criado_em fica em UTC; -3h mantém o dia no horário de Brasília).
   const notas = db.prepare(`
-    SELECT empresa_id, strftime('%Y-%m', criado_em, '-3 hours') AS mes,
-           COUNT(*) AS solicitadas, SUM(status = 'emitida') AS emitidas
-    FROM solicitacoes
-    WHERE status <> 'cancelada' AND date(criado_em, '-3 hours') BETWEEN ? AND ? AND (? IS NULL OR empresa_id = ?)
+    SELECT empresa_id, substr(dia, 1, 7) AS mes, COUNT(*) AS solicitadas, SUM(status = 'emitida') AS emitidas
+    FROM (SELECT empresa_id, status, COALESCE(data_emissao, date(criado_em, '-3 hours')) AS dia FROM solicitacoes
+          WHERE status <> 'cancelada')
+    WHERE dia BETWEEN ? AND ? AND (? IS NULL OR empresa_id = ?)
     GROUP BY empresa_id, mes
   `).all(inicio, fim, empresaId, empresaId);
 
   const ocorrencias = db.prepare(`
-    SELECT empresa_id, tipo, causa, motivo, COUNT(*) AS quantidade, SUM(valor_centavos) AS valor
+    SELECT empresa_id, tipo, causa, motivo, motivo_outro, COUNT(*) AS quantidade, SUM(valor_centavos) AS valor
     FROM ocorrencias WHERE data BETWEEN ? AND ? AND (? IS NULL OR empresa_id = ?)
-    GROUP BY empresa_id, tipo, causa, motivo
+    GROUP BY empresa_id, tipo, causa, motivo, motivo_outro
   `).all(inicio, fim, empresaId, empresaId);
 
   const porEmpresa = new Map(empresas.map((e) => [e.id, {
@@ -142,6 +160,8 @@ function calcularRelatorio(db, { inicio, fim, meses, empresaId = null }) {
     plano_nome: e.plano_nome,
     notas_incluidas: e.notas_incluidas,
     honorario_centavos: e.honorario_centavos,
+    responsavel_id: e.responsavel_id,
+    responsavel_nome: e.responsavel_nome,
     notas: { por_mes: Object.fromEntries(meses.map((m) => [m, 0])), total: 0, emitidas: 0, media_mensal: 0 },
     meses_acima_franquia: 0,
     guias: { total: 0, cliente: 0, escritorio: 0, outro: 0 },
@@ -184,8 +204,10 @@ function calcularRelatorio(db, { inicio, fim, meses, empresaId = null }) {
       totais.multas_valor_centavos += o.valor ?? 0;
     }
     totais.por_causa[o.tipo][o.causa] += o.quantidade;
-    const chave = `${o.tipo}:${o.motivo}`;
-    const m = motivos.get(chave) ?? { tipo: o.tipo, motivo: o.motivo, rotulo: MOTIVOS[o.tipo][o.motivo] ?? o.motivo, quantidade: 0, valor_centavos: 0 };
+    // Motivos "Outro" são agrupados pela descrição digitada.
+    const chave = `${o.tipo}:${o.motivo}:${o.motivo === 'outro' ? normalizarTexto(o.motivo_outro) : ''}`;
+    const rotulo = o.motivo === 'outro' && o.motivo_outro ? `Outro: ${o.motivo_outro}` : MOTIVOS[o.tipo][o.motivo] ?? o.motivo;
+    const m = motivos.get(chave) ?? { tipo: o.tipo, motivo: o.motivo, rotulo, quantidade: 0, valor_centavos: 0 };
     m.quantidade += o.quantidade;
     m.valor_centavos += o.valor ?? 0;
     motivos.set(chave, m);
@@ -201,6 +223,12 @@ function calcularRelatorio(db, { inicio, fim, meses, empresaId = null }) {
     if (e.plano_notas && e.notas_incluidas != null) {
       e.meses_acima_franquia = meses.filter((m) => e.notas.por_mes[m] > e.notas_incluidas).length;
     }
+    // Honorário do período dividido pelas demandas (notas + guias + multas): quanto o
+    // cliente paga por cada demanda atendida. Base para reajustes.
+    e.demandas = e.notas.total + e.guias.total + e.multas.total;
+    e.honorario_por_demanda_centavos = e.honorario_centavos && e.demandas
+      ? Math.round((e.honorario_centavos * meses.length) / e.demandas)
+      : null;
     e.sinais = gerarSinais(e, meses.length);
     resultado.push(e);
   }
@@ -239,19 +267,20 @@ function gerarSinais(e, qtdMeses) {
 
 function relatorioCsv(rel) {
   const cab = [
-    'Empresa', 'CNPJ', 'Plano de notas', 'Plano', 'Notas incluídas/mês', 'Honorário mensal',
+    'Empresa', 'CNPJ', 'Responsável', 'Plano de notas', 'Plano', 'Notas incluídas/mês', 'Honorário mensal',
     ...rel.meses.map((m) => `Notas ${m.slice(5)}/${m.slice(0, 4)}`),
     'Total notas', 'Média/mês', 'Meses acima da franquia',
     'Guias recalculadas', 'Guias (cliente)', 'Guias (escritório)',
-    'Multas', 'Valor multas', 'Multas (cliente)', 'Multas (escritório)', 'Alertas',
+    'Multas', 'Valor multas', 'Multas (cliente)', 'Multas (escritório)', 'Demandas', 'Honorário por demanda', 'Alertas',
   ];
   const linhas = rel.empresas.map((e) => [
-    e.razao_social, e.cnpj, e.plano_notas ? 'Sim' : 'Não', e.plano_nome, e.notas_incluidas,
+    e.razao_social, e.cnpj, e.responsavel_nome, e.plano_notas ? 'Sim' : 'Não', e.plano_nome, e.notas_incluidas,
     e.honorario_centavos == null ? '' : reais(e.honorario_centavos),
     ...rel.meses.map((m) => e.notas.por_mes[m]),
     e.notas.total, String(e.notas.media_mensal).replace('.', ','), e.meses_acima_franquia,
     e.guias.total, e.guias.cliente, e.guias.escritorio,
     e.multas.total, reais(e.multas.valor_centavos), e.multas.cliente, e.multas.escritorio,
+    e.demandas, e.honorario_por_demanda_centavos == null ? '' : reais(e.honorario_por_demanda_centavos),
     e.sinais.map((s) => s.texto).join(' | '),
   ]);
   return paraCsv([cab, ...linhas]);
@@ -260,7 +289,7 @@ function relatorioCsv(rel) {
 function registrarRotasOperacionais({ rota, db, pastaArquivos }) {
   const soEscritorio = { papel: 'escritorio' };
 
-  rota('GET', '/api/ocorrencias/opcoes', () => ({ tipos: TIPOS_OCORRENCIA, motivos: MOTIVOS, causas: CAUSAS, tributos: TRIBUTOS }), soEscritorio);
+  rota('GET', '/api/ocorrencias/opcoes', () => ({ tipos: TIPOS_OCORRENCIA, motivos: MOTIVOS, causas: CAUSAS, tributos: TRIBUTOS, canais: CANAIS_PEDIDO }), soEscritorio);
 
   function anexosDasOcorrencias(ids) {
     const porOcorrencia = new Map(ids.map((id) => [id, []]));
@@ -307,9 +336,9 @@ function registrarRotasOperacionais({ rota, db, pastaArquivos }) {
     try {
       const id = transacao(db, () => {
         const r = db.prepare(`
-          INSERT INTO ocorrencias (empresa_id, tipo, tributo, competencia, data, motivo, causa, valor_centavos, descricao, registrado_por)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(o.empresa_id, o.tipo, o.tributo, o.competencia, o.data, o.motivo, o.causa, o.valor_centavos, o.descricao, usuario.id);
+          INSERT INTO ocorrencias (${CAMPOS_OCORRENCIA.join(', ')}, registrado_por)
+          VALUES (${CAMPOS_OCORRENCIA.map(() => '?').join(', ')}, ?)
+        `).run(...CAMPOS_OCORRENCIA.map((c) => o[c]), usuario.id);
         const novoId = Number(r.lastInsertRowid);
         inserirAnexos(novoId, gravados, usuario.id);
         return novoId;
@@ -324,10 +353,8 @@ function registrarRotasOperacionais({ rota, db, pastaArquivos }) {
   rota('PUT', '/api/ocorrencias/:id', ({ corpo, params }) => {
     const o = validarOcorrencia(db, corpo);
     const r = db.prepare(`
-      UPDATE ocorrencias SET empresa_id = ?, tipo = ?, tributo = ?, competencia = ?, data = ?, motivo = ?, causa = ?,
-        valor_centavos = ?, descricao = ?
-      WHERE id = ?
-    `).run(o.empresa_id, o.tipo, o.tributo, o.competencia, o.data, o.motivo, o.causa, o.valor_centavos, o.descricao, params.id);
+      UPDATE ocorrencias SET ${CAMPOS_OCORRENCIA.map((c) => `${c} = ?`).join(', ')} WHERE id = ?
+    `).run(...CAMPOS_OCORRENCIA.map((c) => o[c]), params.id);
     if (!r.changes) throw new ErroValidacao('Ocorrência não encontrada.', 404);
     return { ok: true };
   }, soEscritorio);

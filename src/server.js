@@ -33,6 +33,7 @@ const app = criarApp({
   pastaArquivos: path.join(PASTA_DADOS, 'anexos'),
   cookieSeguro: process.env.COOKIE_SEGURO === '1',
   confiarProxy: process.env.CONFIAR_PROXY === '1',
+  acessoClientes: process.env.ACESSO_CLIENTES === '1',
 });
 
 // Limpa sessões expiradas a cada hora.

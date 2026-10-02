@@ -19,7 +19,8 @@ test.before(async () => {
   const db = abrirBanco(':memory:');
   db.prepare("INSERT INTO usuarios (nome, email, senha_hash, papel) VALUES ('Admin', 'admin@x.com', ?, 'escritorio')")
     .run(gerarHash('senha-admin'));
-  servidor = http.createServer(criarApp({ db, pastaArquivos: pasta }));
+  // Estes testes cobrem o fluxo de solicitações abertas pelo próprio cliente (acesso de clientes ligado).
+  servidor = http.createServer(criarApp({ db, pastaArquivos: pasta, acessoClientes: true }));
   await new Promise((r) => servidor.listen(0, r));
   base = `http://127.0.0.1:${servidor.address().port}`;
 });
@@ -143,7 +144,7 @@ test('fluxo completo: cadastro, solicitação, emissão e anexo', async () => {
   assert.equal(r.corpo.emitida.quantidade, 1);
   assert.equal(r.corpo.emitida.total_centavos, 250000);
   r = await admin('GET', '/api/solicitacoes.csv?status=emitida');
-  assert.match(r.corpo, /Padaria Boa;NFS-e;Maria Tomadora;52998224725;2500,00/);
+  assert.match(r.corpo, /Padaria Boa;2026\/123;\d{4}-\d{2}-\d{2};NFS-e;Maria Tomadora;52998224725;2500,00/);
 });
 
 test('cancelamento pelo cliente exige motivo e encerra a solicitação', async () => {

@@ -1,4 +1,29 @@
-# Gestão de Solicitações de Notas Fiscais
+# ContabilizaTech · Gestão do escritório
+
+Sistema interno da ContabilizaTech para registrar as notas fiscais emitidas para os clientes
+(pedidas por WhatsApp, e-mail etc.), as guias recalculadas e as multas, e acompanhar tudo por
+cliente, mês e responsável, com a identidade visual da marca.
+
+## Como a equipe usa no dia a dia
+
+- **Painel** (tela inicial): números do mês, franquia de notas de cada cliente (alerta a partir
+  de 80%), quem mais pediu notas e atalhos para lançar.
+- **Registrar nota**: o cliente pede pelo WhatsApp, o escritório emite e envia, e depois lança
+  aqui com número, data de emissão e, se quiser, o XML/PDF (os dados do XML são lidos sozinhos),
+  o canal e a data do pedido (para medir o prazo de atendimento).
+- **Lançar XMLs em lote**: vários XMLs de uma vez; cada um é associado ao cliente pelo CNPJ do
+  emitente, com conferência antes de gravar. PDFs de mesmo nome ou número são anexados juntos.
+- **Guia recalculada / Multa**: com a guia anexada, tributo, competência, motivo e causa. Sempre
+  que a opção "Outro" é escolhida, um campo para descrevê-la é obrigatório.
+- **Perfil do cliente**: tudo do cliente no período, com **ficha para imprimir/salvar em PDF**
+  (reunião de reajuste) e o indicador **honorário por demanda**.
+- **Responsável por cliente**: cada empresa tem uma pessoa da equipe; painel, notas e relatório
+  filtram por responsável.
+
+O acesso de clientes ao sistema vem **desligado** (variável `ACESSO_CLIENTES`). Ligado, os
+clientes podem abrir solicitações e acompanhar o andamento, como na primeira versão.
+
+---
 
 Sistema web para escritórios de contabilidade receberem, acompanharem e responderem
 os pedidos de emissão de notas fiscais dos seus clientes.
@@ -34,6 +59,7 @@ ADMIN_EMAIL=voce@seuescritorio.com.br ADMIN_SENHA='uma-senha-forte' npm start
 | `ADMIN_EMAIL`   | `admin@escritorio.com.br`  | E-mail do primeiro administrador                   |
 | `ADMIN_SENHA`   | (gerada aleatoriamente)    | Senha do primeiro administrador                    |
 | `COOKIE_SEGURO` | —                          | Use `1` em produção com HTTPS                      |
+| `ACESSO_CLIENTES` | —                        | Use `1` para permitir login de clientes            |
 | `CONFIAR_PROXY` | —                          | Use `1` atrás de proxy (Caddy) para obter o IP real |
 | `BACKUP_DIR`    | `DATA_DIR/backups`         | Pasta dos backups diários                          |
 | `BACKUP_HORA`   | `3`                        | Hora do backup diário (Brasília)                   |

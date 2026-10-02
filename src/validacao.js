@@ -100,7 +100,68 @@ function validarSolicitacao(dados) {
   };
 }
 
+const CANAIS_PEDIDO = {
+  whatsapp: 'WhatsApp',
+  email: 'E-mail',
+  telefone: 'Telefone',
+  presencial: 'Presencial',
+  outro: 'Outro',
+};
+
+function dataValidaISO(valor) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(valor) && !Number.isNaN(Date.parse(valor));
+}
+
+// Nota fiscal registrada pelo escritório: só número e data de emissão são obrigatórios.
+function validarNota(dados) {
+  const numero_nota = texto('Número da nota', dados.numero_nota, { obrigatorio: true, max: 50 });
+  const data_emissao = String(dados.data_emissao ?? '');
+  if (!dataValidaISO(data_emissao)) throw new ErroValidacao('Data de emissão inválida.');
+
+  const tipo_nota = dados.tipo_nota || null;
+  if (tipo_nota && !TIPOS_NOTA.includes(tipo_nota)) throw new ErroValidacao('Tipo de nota inválido. Use NFS-e ou NF-e.');
+
+  const tomador_documento = apenasDigitos(dados.tomador_documento) || null;
+  if (tomador_documento && !documentoValido(tomador_documento)) throw new ErroValidacao('CPF/CNPJ do tomador inválido.');
+
+  const tomador_email = texto('E-mail do tomador', dados.tomador_email, { max: 200 });
+  if (tomador_email && !emailValido(tomador_email)) throw new ErroValidacao('E-mail do tomador inválido.');
+
+  let valor_centavos = null;
+  if (dados.valor !== undefined && dados.valor !== null && String(dados.valor).trim() !== '') {
+    valor_centavos = valorParaCentavos(dados.valor);
+    if (!Number.isInteger(valor_centavos) || valor_centavos <= 0) throw new ErroValidacao('Valor da nota inválido.');
+  }
+
+  const canal_pedido = dados.canal_pedido || null;
+  if (canal_pedido && !CANAIS_PEDIDO[canal_pedido]) throw new ErroValidacao('Canal do pedido inválido.');
+  const canal_outro = canal_pedido === 'outro'
+    ? texto('Descrição do canal', dados.canal_outro, { obrigatorio: true, max: 100 })
+    : null;
+
+  const data_pedido = dados.data_pedido ? String(dados.data_pedido) : null;
+  if (data_pedido && !dataValidaISO(data_pedido)) throw new ErroValidacao('Data do pedido inválida.');
+  if (data_pedido && data_pedido > data_emissao) throw new ErroValidacao('A data do pedido não pode ser depois da emissão.');
+
+  return {
+    numero_nota,
+    data_emissao,
+    tipo_nota,
+    tomador_documento,
+    tomador_nome: texto('Nome do tomador', dados.tomador_nome, { max: 200 }),
+    tomador_email,
+    descricao: texto('Descrição', dados.descricao, { max: 2000 }),
+    valor_centavos,
+    canal_pedido,
+    canal_outro,
+    data_pedido,
+  };
+}
+
 module.exports = {
+  CANAIS_PEDIDO,
+  validarNota,
+  dataValidaISO,
   ErroValidacao,
   apenasDigitos,
   cpfValido,
