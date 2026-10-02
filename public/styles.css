@@ -302,3 +302,56 @@ ul.sinais li { font-size: 13px; padding: 3px 0 3px 10px; border-left: 3px solid 
   .doc-portal { flex-direction: column; align-items: stretch; }
   .doc-portal .botao { text-align: center; }
 }
+
+/* ---------- celular ---------- */
+code { overflow-wrap: anywhere; }
+@media (max-width: 860px) { .colunas { grid-template-columns: minmax(0, 1fr); } }
+
+@media (max-width: 700px) {
+  .detalhes dd, .cartao { overflow-wrap: anywhere; }
+  h1 { font-size: 21px; }
+  .cartao { padding: 16px; }
+  .cabecalho-pagina { align-items: flex-start; }
+  .cabecalho-pagina > .acoes, .cabecalho-pagina > .acoes > * { width: 100%; }
+  .cabecalho-pagina > .acoes > .botao, .cabecalho-pagina > .acoes > button { text-align: center; }
+  .filtros > label, .filtros > input, .filtros > select { flex: 1 1 140px; min-width: 0 !important; }
+  .filtros > button, .filtros > .botao { flex: 1 1 auto; text-align: center; }
+  .acoes-rapidas { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  button.acao-rapida { padding: 12px; white-space: normal; }
+  button.acao-rapida span { display: none; }
+  .indicador .numero { font-size: 22px; }
+  .meses .mes { min-width: 64px; padding: 6px 10px; }
+  dialog { padding: 18px 16px; width: 96vw; max-height: 92vh; }
+  dialog.largo, dialog.extra-largo { width: 96vw; }
+
+  /* Tabelas em cartões: cada linha vira um bloco com "título: valor". */
+  .tabela { overflow-x: visible; border: none; background: none; }
+  table:not(.manter) { background: none; }
+  table:not(.manter) thead { display: none; }
+  table:not(.manter), table:not(.manter) tbody, table:not(.manter) tr { display: block; width: 100%; }
+  table:not(.manter) tr {
+    background: var(--cartao); border: 1px solid var(--borda); border-radius: var(--raio); padding: 8px 0; margin-bottom: 10px;
+  }
+  /* O título fica numa coluna à esquerda (posição absoluta) para o conteúdo da célula fluir normalmente. */
+  table:not(.manter) td {
+    display: block; position: relative; min-height: 28px;
+    border: none; padding: 5px 14px 5px calc(38% + 10px); text-align: left; white-space: normal !important; overflow-wrap: anywhere;
+  }
+  table:not(.manter) td::before {
+    content: attr(data-rotulo); position: absolute; left: 14px; top: 7px; width: calc(38% - 18px);
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--suave);
+  }
+  table:not(.manter) td[data-rotulo=""] { padding-left: 14px; }
+  table:not(.manter) td[data-rotulo=""]::before { display: none; }
+  ul.sinais { min-width: 0; }
+  table:not(.manter) td:empty { display: none; }
+  table:not(.manter) td .acoes { flex-wrap: wrap !important; }
+  table:not(.manter) td .barra { min-width: 0; }
+  table.relatorio td { font-size: 14px; }
+  .tabela-rolagem { max-height: none; }
+  table.manter th, table.manter td { padding: 8px 6px; }
+  table.manter th { white-space: normal; overflow-wrap: normal; }
+  .barra { min-width: 0; }
+  /* O SVG encolhe junto com a tela; o texto compensa para continuar legível. */
+  .grafico text { font-size: 19px; }
+}

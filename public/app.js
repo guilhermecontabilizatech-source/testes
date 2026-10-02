@@ -125,6 +125,27 @@ function campo(rotulo, atributos, { inteira = false } = {}) {
   return h('label', { class: inteira ? 'inteira' : null }, rotulo, el);
 }
 
+// No celular as tabelas viram cartões: cada célula recebe o título da sua coluna (data-rotulo),
+// mostrado pelo CSS. Vale também para tabelas montadas depois (diálogos, prévias).
+function rotularTabelas(raiz) {
+  for (const tabela of raiz.querySelectorAll('table:not(.manter)')) {
+    const titulos = [];
+    for (const th of tabela.tHead?.rows[tabela.tHead.rows.length - 1]?.cells ?? []) {
+      for (let i = 0; i < th.colSpan; i++) titulos.push(th.textContent.trim());
+    }
+    for (const corpo of tabela.tBodies) {
+      for (const linha of corpo.rows) {
+        let coluna = 0;
+        for (const celula of linha.cells) {
+          if (!celula.hasAttribute('data-rotulo')) celula.setAttribute('data-rotulo', titulos[coluna] ?? '');
+          coluna += celula.colSpan;
+        }
+      }
+    }
+  }
+}
+new MutationObserver(() => rotularTabelas(document)).observe(document.body, { childList: true, subtree: true });
+
 function renderizar(...elementos) {
   conteudo.replaceChildren(...elementos.filter((el) => el != null && el !== false));
   window.scrollTo(0, 0);
@@ -1715,7 +1736,7 @@ async function telaPainelMes(query) {
       h('div', { class: 'cartao' },
         h('h2', {}, 'Franquia de notas no mês'),
         comFranquia.length
-          ? h('table', {},
+          ? h('table', { class: 'manter' },
             h('thead', {}, h('tr', {}, h('th', {}, 'Cliente'), h('th', { class: 'num' }, 'Usadas'), h('th', {}, 'Uso'))),
             h('tbody', {}, comFranquia.map((e) => {
               const pct = Math.round(e.uso * 100);
@@ -1730,7 +1751,7 @@ async function telaPainelMes(query) {
       h('div', { class: 'cartao' },
         h('h2', {}, 'Quem mais pediu notas'),
         maisNotas.length
-          ? h('table', {}, h('tbody', {}, maisNotas.map((e) => h('tr', {},
+          ? h('table', { class: 'manter' }, h('tbody', {}, maisNotas.map((e) => h('tr', {},
             h('td', {}, h('a', { href: `#/empresa/${e.id}` }, e.razao_social),
               h('div', { class: 'suave' }, e.plano_notas ? (e.plano_nome || 'Com plano') : 'Sem plano de notas')),
             h('td', { class: 'num' }, h('strong', {}, e.notas.total))))))
@@ -1858,7 +1879,7 @@ function graficoColunas({ meses, series }) {
       colunas,
       meses.map((m, i) => svg('text', { x: i * grupo + grupo / 2, y: altura - 6, 'text-anchor': 'middle', class: 'mes' }, mesAbreviado(m)))),
     h('details', { class: 'ver-numeros' }, h('summary', {}, 'Ver os números'),
-      h('table', {},
+      h('table', { class: 'manter' },
         h('thead', {}, h('tr', {}, h('th', {}, 'Mês'), series.map((x) => h('th', { class: 'num' }, x.nome)))),
         h('tbody', {}, meses.map((m, i) => h('tr', {}, h('td', {}, nomeDoMes(m)), series.map((x) => h('td', { class: 'num' }, x.valores[i]))))))));
 }
@@ -1923,7 +1944,7 @@ async function telaDashboard(query) {
       h('div', { class: 'cartao' },
         h('h2', {}, 'Clientes ativos por regime'),
         p.clientes.por_regime.length
-          ? h('div', { class: 'rolagem-x' }, h('table', {},
+          ? h('div', { class: 'rolagem-x' }, h('table', { class: 'manter' },
             h('thead', {}, h('tr', {}, h('th', {}, 'Regime'), h('th', { class: 'num' }, 'Clientes'), h('th', { class: 'num' }, 'Honorários/mês'))),
             h('tbody', {}, p.clientes.por_regime.map((r) => h('tr', {},
               h('td', {}, r.rotulo, h('div', { class: 'barra' }, h('span', { style: { width: `${Math.round((r.quantidade / maiorRegime) * 100)}%` } }))),
