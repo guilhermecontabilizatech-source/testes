@@ -381,6 +381,47 @@ function criarApp({
     return resumo;
   }, { papel: 'escritorio' });
 
+  function dependenciasEmpresa(id) {
+    const conta = (sql) => db.prepare(sql).get(id).n;
+    return {
+      notas: conta('SELECT COUNT(*) AS n FROM solicitacoes WHERE empresa_id = ?'),
+      ocorrencias: conta('SELECT COUNT(*) AS n FROM ocorrencias WHERE empresa_id = ?'),
+      arquivos: conta('SELECT COUNT(*) AS n FROM anexos a JOIN solicitacoes s ON s.id = a.solicitacao_id WHERE s.empresa_id = ?')
+        + conta('SELECT COUNT(*) AS n FROM ocorrencia_anexos a JOIN ocorrencias o ON o.id = a.ocorrencia_id WHERE o.empresa_id = ?'),
+      usuarios: conta('SELECT COUNT(*) AS n FROM usuarios WHERE empresa_id = ?'),
+    };
+  }
+
+  rota('GET', '/api/empresas/:id/dependencias', ({ params }) => {
+    if (!db.prepare('SELECT 1 FROM empresas WHERE id = ?').get(params.id)) throw new ErroValidacao('Empresa não encontrada.', 404);
+    return dependenciasEmpresa(params.id);
+  }, { papel: 'escritorio' });
+
+  // Exclui a empresa com tudo o que é dela (notas, ocorrências, anexos e acessos de cliente).
+  // Se houver dados, exige a confirmação explícita "EXCLUIR".
+  rota('DELETE', '/api/empresas/:id', ({ params, corpo }) => {
+    const empresa = db.prepare('SELECT id FROM empresas WHERE id = ?').get(params.id);
+    if (!empresa) throw new ErroValidacao('Empresa não encontrada.', 404);
+    const dep = dependenciasEmpresa(empresa.id);
+    const temDados = dep.notas || dep.ocorrencias || dep.usuarios;
+    if (temDados && corpo.confirmacao !== 'EXCLUIR') {
+      throw new ErroValidacao('Esta empresa tem registros. Digite EXCLUIR para confirmar.', 409);
+    }
+    const arquivos = [
+      ...db.prepare('SELECT a.arquivo FROM anexos a JOIN solicitacoes s ON s.id = a.solicitacao_id WHERE s.empresa_id = ?').all(empresa.id),
+      ...db.prepare('SELECT a.arquivo FROM ocorrencia_anexos a JOIN ocorrencias o ON o.id = a.ocorrencia_id WHERE o.empresa_id = ?').all(empresa.id),
+    ].map((a) => a.arquivo);
+    transacao(db, () => {
+      // Histórico, anexos de notas e anexos de ocorrências saem em cascata.
+      db.prepare('DELETE FROM solicitacoes WHERE empresa_id = ?').run(empresa.id);
+      db.prepare('DELETE FROM ocorrencias WHERE empresa_id = ?').run(empresa.id);
+      db.prepare('DELETE FROM usuarios WHERE empresa_id = ?').run(empresa.id);
+      db.prepare('DELETE FROM empresas WHERE id = ?').run(empresa.id);
+    });
+    apagarArquivos(pastaArquivos, arquivos);
+    return { ok: true, ...dep };
+  }, { papel: 'escritorio' });
+
   rota('PUT', '/api/empresas/:id', ({ params, corpo }) => {
     const e = validarEmpresa(corpo);
     try {

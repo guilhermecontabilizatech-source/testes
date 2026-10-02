@@ -454,6 +454,38 @@ async function abrirFormularioEmpresa(e = {}) {
     h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
 }
 
+// Exclusão de empresa: mostra o que será apagado junto e, se houver registros, exige digitar EXCLUIR.
+async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
+  const dep = await api(`/api/empresas/${e.id}/dependencias`);
+  const temDados = dep.notas || dep.ocorrencias || dep.usuarios;
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/empresas/${e.id}`, { metodo: 'DELETE', dados: { confirmacao: dados.confirmacao ?? '' } });
+      dialogo.close();
+      avisar(`${e.razao_social} excluída.`);
+      if (aoExcluir) aoExcluir(); else rotear();
+    }),
+  },
+  h('h2', {}, 'Excluir empresa'),
+  h('p', {}, h('strong', {}, e.razao_social), ` · CNPJ ${documento(e.cnpj)}`),
+  temDados
+    ? h('div', { class: 'alerta erro' },
+      h('strong', {}, 'Também serão apagados, sem possibilidade de desfazer:'),
+      h('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } },
+        dep.notas ? h('li', {}, `${dep.notas} nota(s) fiscal(is)`) : null,
+        dep.ocorrencias ? h('li', {}, `${dep.ocorrencias} guia(s) recalculada(s)/multa(s)`) : null,
+        dep.arquivos ? h('li', {}, `${dep.arquivos} arquivo(s) anexado(s)`) : null,
+        dep.usuarios ? h('li', {}, `${dep.usuarios} acesso(s) de cliente`) : null))
+    : h('p', { class: 'suave' }, 'Esta empresa não tem notas nem ocorrências registradas.'),
+  temDados ? h('p', { class: 'suave' },
+    'Se a empresa só deixou de ser cliente, prefira ', h('strong', {}, 'Editar → Situação: Inativa'),
+    ': ela some das listas de lançamento, mas o histórico continua no relatório.') : null,
+  temDados ? campo('Para confirmar, digite EXCLUIR', { name: 'confirmacao', required: true, autocomplete: 'off', pattern: 'EXCLUIR' }) : null,
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit', class: 'perigo' }, 'Excluir empresa'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
 async function telaEmpresas() {
   const empresas = await api('/api/empresas');
   renderizar(
@@ -475,7 +507,8 @@ async function telaEmpresas() {
           h('td', {}, e.ativo ? 'Ativa' : 'Inativa'),
           h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
             h('a', { class: 'botao', href: `#/empresa/${e.id}` }, 'Abrir perfil'),
-            h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar'))))))))
+            h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar'),
+            h('button', { class: 'secundario', title: 'Excluir empresa', onclick: () => abrirExclusaoEmpresa(e) }, 'Excluir'))))))))
       : h('div', { class: 'cartao vazio' }, 'Cadastre a primeira empresa cliente ou importe uma planilha para começar.'));
 }
 
@@ -935,6 +968,7 @@ async function telaPerfilEmpresa(id, query) {
       h('div', { class: 'acoes', style: { marginTop: 0 } },
         h('button', { class: 'secundario', onclick: () => window.print() }, 'Imprimir ficha / PDF'),
         h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar cadastro'),
+        h('button', { class: 'secundario', onclick: () => abrirExclusaoEmpresa(e, { aoExcluir: () => { location.hash = '#/empresas'; } }) }, 'Excluir empresa'),
         h('a', { href: '#/empresas' }, '← Empresas'))),
     h('div', { class: 'acoes-rapidas' },
       h('button', { class: 'acao-rapida destaque', onclick: () => abrirDialogoNota(e) },

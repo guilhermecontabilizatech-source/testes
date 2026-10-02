@@ -123,3 +123,30 @@ test('acesso de clientes desativado por padrão', async () => {
   assert.match(r.corpo.erro, /acesso de clientes/);
   assert.deepEqual((await ana('GET', '/api/opcoes')).corpo.acesso_clientes, false);
 });
+
+test('excluir empresa: sem dados direto; com dados exige EXCLUIR e apaga tudo, inclusive arquivos', async () => {
+  const ana = await entrar('ana@x.com', 'senha-ana1');
+  const vazia = (await ana('POST', '/api/empresas', { razao_social: 'Importada errada', cnpj: '45.723.174/0001-10' })).corpo.id;
+  assert.deepEqual((await ana('GET', `/api/empresas/${vazia}/dependencias`)).corpo, { notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0 });
+  assert.equal((await ana('DELETE', `/api/empresas/${vazia}`, {})).status, 200);
+
+  const empresa = db.prepare("SELECT id FROM empresas WHERE cnpj = '11222333000181'").get().id;
+  await ana('POST', '/api/notas-emitidas', {
+    empresa_id: empresa, numero_nota: '900', data_emissao: '2026-10-07',
+    arquivos: [{ nome_arquivo: 'n.pdf', tipo_mime: 'application/pdf', conteudo_base64: Buffer.from('%PDF').toString('base64') }],
+  });
+  const dep = (await ana('GET', `/api/empresas/${empresa}/dependencias`)).corpo;
+  assert.ok(dep.notas >= 1 && dep.ocorrencias >= 2 && dep.arquivos === 1 && dep.usuarios === 1);
+
+  let r = await ana('DELETE', `/api/empresas/${empresa}`, {});
+  assert.equal(r.status, 409);
+  const antes = fs.readdirSync(pasta).length;
+  r = await ana('DELETE', `/api/empresas/${empresa}`, { confirmacao: 'EXCLUIR' });
+  assert.equal(r.status, 200);
+  assert.equal(fs.readdirSync(pasta).length, antes - 1);
+  for (const tabela of ['solicitacoes', 'ocorrencias', 'historico', 'anexos']) {
+    assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${tabela}`).get().n, 0, tabela);
+  }
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM usuarios WHERE papel = 'cliente'").get().n, 0);
+  assert.equal((await ana('GET', `/api/empresas/${empresa}/dependencias`)).status, 404);
+});
