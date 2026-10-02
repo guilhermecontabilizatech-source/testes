@@ -126,4 +126,4 @@ function lerXmlNota(conteudo) {
   return null;
 }
 
-module.exports = { lerXmlNota };
+module.exports = { lerXmlNota, decodificar };

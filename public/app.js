@@ -441,7 +441,9 @@ async function telaEmpresas() {
   renderizar(
     h('div', { class: 'cabecalho-pagina' },
       h('h1', {}, 'Empresas clientes'),
-      h('button', { onclick: () => abrirFormularioEmpresa() }, '+ Nova empresa')),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'secundario', onclick: abrirImportacao }, 'Importar planilha ou PDF'),
+        h('button', { onclick: () => abrirFormularioEmpresa() }, '+ Nova empresa'))),
     empresas.length
       ? h('div', { class: 'tabela' }, h('table', {},
         h('thead', {}, h('tr', {}, ['Razão social', 'CNPJ', 'Plano de notas', 'Contato', 'Usuários', 'Em aberto', 'Situação', ''].map((t) => h('th', {}, t)))),
@@ -457,6 +459,113 @@ async function telaEmpresas() {
             h('a', { class: 'botao', href: `#/empresa/${e.id}` }, 'Abrir perfil'),
             h('button', { class: 'secundario', onclick: () => abrirFormularioEmpresa(e) }, 'Editar'))))))))
       : h('div', { class: 'cartao vazio' }, 'Cadastre a primeira empresa cliente para começar.'));
+}
+
+const SITUACAO_IMPORTACAO = {
+  nova: { rotulo: 'Nova', cor: 'var(--emitida)' },
+  existente: { rotulo: 'Já cadastrada', cor: 'var(--em_emissao)' },
+  erro: { rotulo: 'Com erro', cor: 'var(--rejeitada)' },
+};
+
+// Importação de empresas: o arquivo é analisado no servidor e o usuário confere antes de gravar.
+function abrirImportacao() {
+  const inputArquivo = h('input', { type: 'file', accept: '.xlsx,.csv,.pdf' });
+  const resultado = h('div', {});
+  const dialogo = abrirDialogo(
+    h('h2', {}, 'Importar empresas'),
+    h('p', { class: 'suave' },
+      'Envie uma planilha (.xlsx ou .csv) ou um PDF com a relação de clientes. O sistema reconhece as colunas ',
+      'CNPJ, razão social, e-mail, telefone, plano, notas incluídas e honorário. Nada é gravado antes da sua confirmação. ',
+      h('a', { href: '/api/empresas/modelo.csv' }, 'Baixar planilha modelo')),
+    h('label', {}, 'Arquivo', inputArquivo),
+    resultado,
+    h('div', { class: 'acoes' }, h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar')));
+  dialogo.classList.add('extra-largo');
+
+  inputArquivo.addEventListener('change', async () => {
+    const arquivo = inputArquivo.files[0];
+    if (!arquivo) return;
+    resultado.replaceChildren(h('p', { class: 'suave' }, 'Lendo o arquivo…'));
+    try {
+      if (arquivo.size > 10 * 1024 * 1024) throw new Error('Arquivo maior que 10 MB.');
+      const analise = await api('/api/empresas/importar/analisar', {
+        metodo: 'POST',
+        dados: { nome_arquivo: arquivo.name, conteudo_base64: await lerArquivoBase64(arquivo) },
+      });
+      mostrarAnalise(analise);
+    } catch (err) {
+      resultado.replaceChildren(h('div', { class: 'alerta erro' }, err.message));
+    }
+  });
+
+  function mostrarAnalise(analise) {
+    const conta = (sit) => analise.empresas.filter((e) => e.situacao === sit).length;
+    const caixaAtualizar = h('input', { type: 'checkbox' });
+    const marcadores = new Map();
+    const botao = h('button', { type: 'button' });
+    const atualizarBotao = () => {
+      const n = [...marcadores.values()].filter((c) => c.checked).length;
+      botao.textContent = `Importar ${n} empresa(s)`;
+      botao.disabled = n === 0;
+    };
+    caixaAtualizar.addEventListener('change', () => {
+      for (const [e, c] of marcadores) if (e.situacao === 'existente') c.checked = caixaAtualizar.checked;
+      atualizarBotao();
+    });
+
+    const linhas = analise.empresas.map((e) => {
+      const marcar = e.situacao !== 'erro'
+        ? h('input', { type: 'checkbox', checked: e.situacao === 'nova', onchange: atualizarBotao })
+        : null;
+      if (marcar) marcadores.set(e, marcar);
+      const plano = e.plano_informado
+        ? (e.plano_notas ? `${e.plano_nome || 'Com plano'}${e.notas_incluidas != null ? ` · ${e.notas_incluidas}/mês` : ''}` : 'Sem plano')
+        : '—';
+      return h('tr', {},
+        h('td', {}, marcar),
+        h('td', { class: 'suave' }, e.linha ?? '—'),
+        h('td', {}, documento(e.cnpj) || '—'),
+        h('td', {}, e.razao_social || '—'),
+        h('td', {}, e.email ?? '', e.telefone ? h('div', { class: 'suave' }, e.telefone) : null),
+        h('td', {}, plano),
+        h('td', { class: 'num' }, e.honorario_centavos == null ? '—' : moeda(e.honorario_centavos)),
+        h('td', {}, h('span', { class: 'etiqueta', style: { '--cor': SITUACAO_IMPORTACAO[e.situacao].cor } }, SITUACAO_IMPORTACAO[e.situacao].rotulo),
+          e.mensagem ? h('div', { class: 'suave' }, e.mensagem) : null));
+    });
+
+    botao.addEventListener('click', async () => {
+      const escolhidas = [...marcadores].filter(([, c]) => c.checked).map(([e]) => e);
+      botao.disabled = true;
+      try {
+        const r = await api('/api/empresas/importar', {
+          metodo: 'POST',
+          dados: { empresas: escolhidas, atualizar_existentes: caixaAtualizar.checked },
+        });
+        dialogo.close();
+        const partes = [`${r.criadas} empresa(s) criada(s)`];
+        if (r.atualizadas) partes.push(`${r.atualizadas} atualizada(s)`);
+        if (r.erros.length) partes.push(`${r.erros.length} com erro`);
+        avisar(partes.join(', ') + '.', r.erros.length ? 'erro' : 'sucesso');
+        rotear();
+      } catch (err) {
+        avisar(err.message, 'erro');
+        atualizarBotao();
+      }
+    });
+
+    resultado.replaceChildren(
+      h('div', { class: 'alerta info' },
+        `${analise.empresas.length} linha(s) encontradas: ${conta('nova')} nova(s), ${conta('existente')} já cadastrada(s), ${conta('erro')} com erro.`,
+        h('div', { class: 'peq' }, analise.colunas_reconhecidas.length
+          ? `Colunas reconhecidas: ${analise.colunas_reconhecidas.join(', ')}.`
+          : 'Nenhum cabeçalho reconhecido: CNPJ e nome foram identificados pelo conteúdo de cada linha. Confira com atenção.')),
+      conta('existente') ? h('label', { class: 'checkbox' }, caixaAtualizar, 'Atualizar os dados das empresas já cadastradas (só os campos preenchidos no arquivo)') : null,
+      h('div', { class: 'tabela tabela-rolagem' }, h('table', {},
+        h('thead', {}, h('tr', {}, ['', 'Linha', 'CNPJ', 'Razão social', 'Contato', 'Plano', 'Honorário', 'Situação'].map((t) => h('th', { class: t === 'Honorário' ? 'num' : null }, t)))),
+        h('tbody', {}, linhas))),
+      h('div', { class: 'acoes' }, botao));
+    atualizarBotao();
+  }
 }
 
 function descricaoPlano(e) {

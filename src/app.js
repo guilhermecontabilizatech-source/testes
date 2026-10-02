@@ -9,6 +9,7 @@ const { registrarRotasOperacionais } = require('./operacional');
 const { prepararArquivo, prepararArquivos, gravarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 const { lerXmlNota } = require('./xmlNota');
 const { criarLimitador } = require('./limitador');
+const importacao = require('./importacao');
 const {
   ErroValidacao,
   apenasDigitos,
@@ -267,6 +268,80 @@ function criarApp({ db, pastaArquivos, cookieSeguro = false, confiarProxy = fals
     } catch (err) {
       return erroUnico(err, 'Já existe uma empresa com este CNPJ.');
     }
+  }, { papel: 'escritorio' });
+
+  // ---------- importação de empresas (planilha ou PDF) ----------
+
+  rota('GET', '/api/empresas/modelo.csv', ({ responderBruto }) => {
+    responderBruto(200, `\uFEFF${importacao.MODELO_CSV}`, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': 'attachment; filename="modelo-empresas.csv"',
+    });
+  }, { papel: 'escritorio' });
+
+  rota('POST', '/api/empresas/importar/analisar', async ({ corpo }) => {
+    const nome = texto('Nome do arquivo', corpo.nome_arquivo, { obrigatorio: true, max: 200 });
+    const conteudo = Buffer.from(String(corpo.conteudo_base64 ?? ''), 'base64');
+    if (!conteudo.length) throw new ErroValidacao('Arquivo vazio.');
+    if (conteudo.length > 10 * 1024 * 1024) throw new ErroValidacao('Arquivo maior que 10 MB.');
+    const lido = await importacao.lerLinhas(nome, conteudo);
+    const existentes = new Map(db.prepare('SELECT cnpj, razao_social FROM empresas').all().map((e) => [e.cnpj, e.razao_social]));
+    const analise = importacao.analisarLinhas(lido, existentes);
+    if (!analise.empresas.length) {
+      throw new ErroValidacao('Não encontrei empresas neste arquivo. Confira se há uma coluna de CNPJ, ou use o modelo de planilha.', 422);
+    }
+    return analise;
+  }, { papel: 'escritorio' });
+
+  rota('POST', '/api/empresas/importar', ({ corpo }) => {
+    if (!Array.isArray(corpo.empresas) || !corpo.empresas.length) throw new ErroValidacao('Selecione ao menos uma empresa.');
+    if (corpo.empresas.length > 2000) throw new ErroValidacao('Importe no máximo 2.000 empresas por vez.');
+    const atualizar = corpo.atualizar_existentes === true;
+    const buscar = db.prepare('SELECT * FROM empresas WHERE cnpj = ?');
+    const resumo = { criadas: 0, atualizadas: 0, ignoradas: 0, erros: [] };
+
+    const operacoes = [];
+    const vistos = new Set();
+    for (const item of corpo.empresas) {
+      try {
+        const cnpj = apenasDigitos(item.cnpj);
+        if (vistos.has(cnpj)) { resumo.ignoradas++; continue; }
+        vistos.add(cnpj);
+        const existente = buscar.get(cnpj);
+        if (existente && !atualizar) { resumo.ignoradas++; continue; }
+        // Em empresas já cadastradas, só sobrescreve o que veio preenchido no arquivo.
+        const base = existente ? { ...existente, honorario: existente.honorario_centavos == null ? '' : existente.honorario_centavos / 100 } : {};
+        const preenchido = (v) => v !== undefined && v !== null && v !== '';
+        const dados = { ...base, ativo: existente ? existente.ativo : 1 };
+        for (const campo of ['razao_social', 'email', 'telefone']) if (preenchido(item[campo])) dados[campo] = item[campo];
+        dados.cnpj = cnpj;
+        if (!existente || item.plano_informado) {
+          dados.plano_notas = Boolean(item.plano_notas);
+          if (preenchido(item.plano_nome)) dados.plano_nome = item.plano_nome;
+          if (preenchido(item.notas_incluidas)) dados.notas_incluidas = item.notas_incluidas;
+        }
+        if (preenchido(item.honorario_centavos)) dados.honorario = Number(item.honorario_centavos) / 100;
+        operacoes.push({ existente, empresa: validarEmpresa(dados) });
+      } catch (err) {
+        if (!(err instanceof ErroValidacao)) throw err;
+        resumo.erros.push({ cnpj: item.cnpj, razao_social: item.razao_social, erro: err.message });
+      }
+    }
+
+    transacao(db, () => {
+      const inserir = db.prepare(`INSERT INTO empresas (${CAMPOS_EMPRESA.join(', ')}) VALUES (${CAMPOS_EMPRESA.map(() => '?').join(', ')})`);
+      const atualizarSql = db.prepare(`UPDATE empresas SET ${CAMPOS_EMPRESA.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`);
+      for (const { existente, empresa } of operacoes) {
+        if (existente) {
+          atualizarSql.run(...CAMPOS_EMPRESA.map((c) => empresa[c]), existente.id);
+          resumo.atualizadas++;
+        } else {
+          inserir.run(...CAMPOS_EMPRESA.map((c) => empresa[c]));
+          resumo.criadas++;
+        }
+      }
+    });
+    return resumo;
   }, { papel: 'escritorio' });
 
   rota('PUT', '/api/empresas/:id', ({ params, corpo }) => {

@@ -1,4 +1,4 @@
-# Imagem do sistema de notas fiscais (sem dependências externas além do Node).
+# Imagem do sistema de notas fiscais.
 FROM node:22-alpine
 
 ENV NODE_ENV=production \
@@ -6,7 +6,8 @@ ENV NODE_ENV=production \
     PORT=3000
 
 WORKDIR /app
-COPY package.json ./
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 COPY src ./src
 COPY public ./public
 COPY scripts ./scripts

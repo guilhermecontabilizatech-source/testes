@@ -147,3 +147,7 @@ button.acao-rapida.perigo:hover { background: #991b1b; }
 .mes strong { font-size: 20px; }
 .mes.acima { border-color: var(--rejeitada); background: color-mix(in srgb, var(--rejeitada) 8%, white); color: var(--rejeitada); }
 main > h2 { margin-top: 8px; }
+
+dialog.extra-largo { width: min(1100px, 96vw); }
+.tabela-rolagem { max-height: 50vh; overflow: auto; margin-top: 12px; }
+.tabela-rolagem thead th { position: sticky; top: 0; }

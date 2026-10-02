@@ -13,5 +13,8 @@
     "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js",
     "backup": "node --disable-warning=ExperimentalWarning scripts/backup.js"
   },
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "dependencies": {
+    "pdfjs-dist": "^6.3.289"
+  }
 }

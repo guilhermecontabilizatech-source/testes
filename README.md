@@ -10,10 +10,11 @@ os pedidos de emissão de notas fiscais dos seus clientes.
 
 ## Como rodar
 
-Requisito: **Node.js 22.13 ou superior**. Não há dependências externas (usa o SQLite
-embutido no Node).
+Requisito: **Node.js 22.13 ou superior**. O banco é o SQLite embutido no Node; a única
+dependência externa é a `pdfjs-dist`, usada para ler PDFs na importação de empresas.
 
 ```bash
+npm install
 npm start
 ```
 
@@ -99,6 +100,21 @@ upsell e melhoria do serviço.
 
    O botão **Exportar CSV** gera a planilha completa para abrir no Excel.
 
+## Importar empresas de planilha ou PDF
+
+Em *Empresas* → **Importar planilha ou PDF**, envie a relação de clientes:
+
+- **Planilha (.xlsx ou .csv):** as colunas são reconhecidas pelo cabeçalho, que não precisa
+  estar na primeira linha: CNPJ, razão social, e-mail, telefone, plano, notas incluídas,
+  honorário e "tem plano de notas". CNPJ guardado como número (sem o zero à esquerda) é
+  corrigido. Há uma **planilha modelo** para baixar na própria tela.
+- **PDF:** relatórios de clientes exportados por sistemas contábeis, em tabela (inclusive
+  com cabeçalho repetido em cada página) ou em lista corrida. PDF escaneado (imagem) não é lido.
+
+Antes de gravar, o sistema mostra cada linha como **nova**, **já cadastrada** ou **com erro**
+(CNPJ inválido, CPF, CNPJ repetido no arquivo). Você escolhe o que importar e se quer
+atualizar as empresas já cadastradas; nesse caso, só os campos preenchidos no arquivo são alterados.
+
 ## Lançamento automático pelo perfil do cliente
 
 Em *Empresas* → **Abrir perfil**, cada cliente tem um painel do período (notas por mês,
@@ -142,6 +158,7 @@ src/
   csv.js        geração de planilhas CSV
   xmlNota.js    leitura de XML de NF-e e NFS-e
   arquivos.js   validação e gravação de anexos
+  importacao.js leitura de planilhas e PDFs para importar empresas
 public/         interface web (HTML/CSS/JS, sem build)
 test/           testes automatizados (node --test)
 ```
