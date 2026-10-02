@@ -11,17 +11,22 @@
 </head>
 <body>
   <header id="topo" hidden>
-    <a href="#/" class="marca" aria-label="ContabilizaTech, início">
-      <img src="/marca/logo.webp" alt="ContabilizaTech" width="184" height="32">
-    </a>
+    <div class="topo-marca">
+      <a href="#/" class="marca" aria-label="ContabilizaTech, início">
+        <img src="/marca/logo.webp" alt="ContabilizaTech" width="184" height="32">
+      </a>
+      <button id="abrir-menu" class="link" aria-expanded="false" aria-controls="menu">Menu</button>
+    </div>
+    <div id="faixa-marca" class="faixa-marca" hidden></div>
     <nav id="menu"></nav>
     <div class="usuario">
       <span id="nome-usuario"></span>
-      <a href="#/senha">Trocar senha</a>
-      <button id="sair" class="link">Sair</button>
+      <div class="usuario-acoes">
+        <a href="#/senha">Trocar senha</a>
+        <button id="sair" class="link">Sair</button>
+      </div>
     </div>
   </header>
-  <div id="faixa-marca" class="faixa-marca" hidden></div>
   <main id="conteudo"></main>
   <div id="aviso" role="status" hidden></div>
   <script src="/app.js"></script>

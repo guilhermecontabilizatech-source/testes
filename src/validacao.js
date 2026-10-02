@@ -108,6 +108,31 @@ const CANAIS_PEDIDO = {
   outro: 'Outro',
 };
 
+// Regime tributário do cliente (cadastro de empresas).
+const REGIMES = {
+  simples_nacional: 'Simples Nacional',
+  mei: 'MEI',
+  lucro_presumido: 'Lucro Presumido',
+  lucro_real: 'Lucro Real',
+  autonomo: 'Autônomo / pessoa física',
+  outro: 'Outro',
+};
+
+// Reconhece o regime escrito por extenso (planilhas de importação).
+function lerRegime(valor) {
+  const t = String(valor ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (!t.trim()) return null;
+  if (/\bmei\b|microempreendedor/.test(t)) return 'mei';
+  if (/simples/.test(t)) return 'simples_nacional';
+  if (/presumido/.test(t)) return 'lucro_presumido';
+  if (/real/.test(t)) return 'lucro_real';
+  if (/autonomo|pessoa fisica|carne.?leao/.test(t)) return 'autonomo';
+  return null;
+}
+
+const UFS = ['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR',
+  'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
+
 function dataValidaISO(valor) {
   return /^\d{4}-\d{2}-\d{2}$/.test(valor) && !Number.isNaN(Date.parse(valor));
 }
@@ -160,6 +185,9 @@ function validarNota(dados) {
 
 module.exports = {
   CANAIS_PEDIDO,
+  REGIMES,
+  UFS,
+  lerRegime,
   validarNota,
   dataValidaISO,
   ErroValidacao,

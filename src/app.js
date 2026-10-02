@@ -7,6 +7,7 @@ const { transacao } = require('./db');
 const { paraCsv } = require('./csv');
 const { registrarRotasOperacionais } = require('./operacional');
 const { registrarRotasZen } = require('./zen');
+const { registrarRotasPainel } = require('./painel');
 const { prepararArquivo, prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 const { lerXmlNota } = require('./xmlNota');
 const { criarLimitador } = require('./limitador');
@@ -15,12 +16,16 @@ const {
   ErroValidacao,
   apenasDigitos,
   cnpjValido,
+  cpfValido,
+  dataValidaISO,
   emailValido,
   texto,
   validarSolicitacao,
   validarNota,
   valorParaCentavos,
   CANAIS_PEDIDO,
+  REGIMES,
+  UFS,
 } = require('./validacao');
 
 const LIMITE_CORPO = 30 * 1024 * 1024; // anexos chegam em base64 (até 10 MB cada)
@@ -227,7 +232,7 @@ function criarApp({
   }, { portal: true });
 
   rota('GET', '/api/opcoes', () => ({
-    canais: CANAIS_PEDIDO, acesso_clientes: acessoClientes, portal_clientes: portalClientes, clientes_entram: clientesEntram,
+    canais: CANAIS_PEDIDO, regimes: REGIMES, ufs: UFS, acesso_clientes: acessoClientes, portal_clientes: portalClientes, clientes_entram: clientesEntram,
   }), { portal: true });
 
   rota('GET', '/api/me', ({ usuario }) => {
@@ -258,8 +263,11 @@ function criarApp({
   `).all().map((l) => ({ ...l })), { papel: 'escritorio' });
 
   function validarEmpresa(corpo) {
+    // Autônomos e pessoas físicas são cadastrados pelo CPF.
     const cnpj = apenasDigitos(corpo.cnpj);
-    if (!cnpjValido(cnpj)) throw new ErroValidacao('CNPJ inválido.');
+    if (cnpj.length === 11) {
+      if (!cpfValido(cnpj)) throw new ErroValidacao('CPF inválido.');
+    } else if (!cnpjValido(cnpj)) throw new ErroValidacao('CNPJ inválido.');
     const email = texto('E-mail', corpo.email, { max: 200 });
     if (email && !emailValido(email)) throw new ErroValidacao('E-mail inválido.');
     const planoNotas = corpo.plano_notas === true || corpo.plano_notas === 1 || corpo.plano_notas === '1' ? 1 : 0;
@@ -273,9 +281,23 @@ function criarApp({
       honorario = valorParaCentavos(corpo.honorario);
       if (!Number.isInteger(honorario) || honorario < 0) throw new ErroValidacao('Honorário mensal inválido.');
     }
+    const regime = corpo.regime || null;
+    if (regime && !REGIMES[regime]) throw new ErroValidacao('Regime tributário inválido.');
+    const uf = corpo.uf ? String(corpo.uf).trim().toUpperCase() : null;
+    if (uf && !UFS.includes(uf)) throw new ErroValidacao('UF inválida.');
+    const dataContrato = corpo.data_contrato ? String(corpo.data_contrato) : null;
+    if (dataContrato && !dataValidaISO(dataContrato)) throw new ErroValidacao('Data de início do contrato inválida.');
     return {
       razao_social: texto('Razão social', corpo.razao_social, { obrigatorio: true, max: 200 }),
       cnpj,
+      nome_fantasia: texto('Nome fantasia', corpo.nome_fantasia, { max: 200 }),
+      regime,
+      regime_outro: regime === 'outro' ? texto('Descrição do regime', corpo.regime_outro, { obrigatorio: true, max: 100 }) : null,
+      endereco: texto('Endereço', corpo.endereco, { max: 300 }),
+      cidade: texto('Cidade', corpo.cidade, { max: 100 }),
+      uf,
+      data_contrato: dataContrato,
+      observacoes: texto('Observações', corpo.observacoes, { max: 2000 }),
       email,
       telefone: texto('Telefone', corpo.telefone, { max: 30 }),
       ativo: corpo.ativo === false || corpo.ativo === 0 ? 0 : 1,
@@ -297,7 +319,8 @@ function criarApp({
   }
 
   const CAMPOS_EMPRESA = ['razao_social', 'cnpj', 'email', 'telefone', 'ativo', 'plano_notas', 'plano_nome', 'notas_incluidas',
-    'honorario_centavos', 'responsavel_id'];
+    'honorario_centavos', 'responsavel_id', 'nome_fantasia', 'regime', 'regime_outro', 'endereco', 'cidade', 'uf', 'data_contrato',
+    'observacoes'];
 
   function erroUnico(err, mensagem) {
     if (String(err.message).includes('UNIQUE')) throw new ErroValidacao(mensagem, 409);
@@ -366,6 +389,7 @@ function criarApp({
           if (preenchido(item.notas_incluidas)) dados.notas_incluidas = item.notas_incluidas;
         }
         if (preenchido(item.honorario_centavos)) dados.honorario = Number(item.honorario_centavos) / 100;
+        if (preenchido(item.regime)) dados.regime = item.regime;
         operacoes.push({ existente, empresa: validarEmpresa(dados) });
       } catch (err) {
         if (!(err instanceof ErroValidacao)) throw err;
@@ -818,6 +842,7 @@ function criarApp({
   // ---------- Questor Zen (webhook) e portal do cliente ----------
 
   registrarRotasZen({ rota, db, pastaArquivos, tokenWebhook: zenWebhookToken });
+  registrarRotasPainel({ rota, db, hoje: hojeBrasilia });
 
   // ---------- servidor HTTP ----------
 

@@ -5,7 +5,7 @@
 // em planilhas x é o número da coluna; no PDF, a posição horizontal do texto na página.
 
 const zlib = require('node:zlib');
-const { ErroValidacao, apenasDigitos, cnpjValido, cpfValido, emailValido, valorParaCentavos } = require('./validacao');
+const { ErroValidacao, apenasDigitos, cnpjValido, cpfValido, emailValido, lerRegime, valorParaCentavos } = require('./validacao');
 const { decodificar } = require('./xmlNota');
 
 // ---------------------------------------------------------------------------
@@ -199,11 +199,13 @@ const CAMPOS = {
   plano_nome: [/^plano$|nome do plano|plano contratado/],
   notas_incluidas: [/notas? inclu|franquia|notas? mes|qtd notas|quantidade de notas/],
   honorario: [/honorario|mensalidade/],
+  regime: [/regime|tributacao|enquadramento/],
 };
 
 const ROTULOS_CAMPOS = {
   cnpj: 'CNPJ', razao_social: 'Razão social', email: 'E-mail', telefone: 'Telefone',
   plano_notas: 'Tem plano de notas', plano_nome: 'Plano', notas_incluidas: 'Notas incluídas', honorario: 'Honorário',
+  regime: 'Regime tributário',
 };
 
 function detectarCabecalho(linhas) {
@@ -301,6 +303,7 @@ function extrairEmpresa(celulas, cabecalho, exato) {
     plano_nome: planoNome || null,
     notas_incluidas: Number.isInteger(notas) ? notas : null,
     honorario_centavos: Number.isInteger(honorario) ? honorario : null,
+    regime: lerRegime(daColuna('regime')),
   };
 }
 
@@ -330,7 +333,7 @@ function analisarLinhas({ origem, linhas }, cnpjsExistentes) {
     if (!temDocumento) {
       situacao = 'erro'; mensagem = 'CNPJ não encontrado nesta linha.';
     } else if (e.cnpj.length === 11 && cpfValido(e.cnpj)) {
-      situacao = 'erro'; mensagem = 'É um CPF: o cadastro de empresas aceita só CNPJ.';
+      situacao = 'erro'; mensagem = 'É um CPF: pessoas físicas são cadastradas uma a uma, em "+ Nova empresa".';
     } else if (!cnpjValido(e.cnpj)) {
       situacao = 'erro'; mensagem = 'CNPJ inválido (dígito verificador não confere).';
     } else if (!e.razao_social) {
@@ -351,7 +354,7 @@ function analisarLinhas({ origem, linhas }, cnpjsExistentes) {
   return { origem, colunas_reconhecidas: colunas, empresas: resultado };
 }
 
-const MODELO_CSV = 'CNPJ;Razão social;E-mail;Telefone;Plano;Notas incluídas;Honorário\r\n'
-  + '11.222.333/0001-81;Exemplo Comércio Ltda;contato@exemplo.com.br;(11) 99999-0000;Essencial;10;450,00\r\n';
+const MODELO_CSV = 'CNPJ;Razão social;E-mail;Telefone;Regime;Plano;Notas incluídas;Honorário\r\n'
+  + '11.222.333/0001-81;Exemplo Comércio Ltda;contato@exemplo.com.br;(11) 99999-0000;Simples Nacional;Essencial;10;450,00\r\n';
 
 module.exports = { lerLinhas, analisarLinhas, lerCsv, lerXlsx, lerZip, MODELO_CSV };

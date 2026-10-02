@@ -26,10 +26,18 @@ A versão "controle de demandas out–dez/2026" está preservada na tag `v1-cont
 | `src/xmlNota.js` | Leitura de XML de NF-e, NFS-e Nacional e ABRASF |
 | `src/arquivos.js` | Validação e gravação de anexos (nome aleatório, fora de `public/`) |
 | `src/operacional.js` | Guias recalculadas, multas e relatório por cliente (específico da v1) |
+| `src/painel.js` | Indicadores do dashboard (`GET /api/painel?mes=`): clientes, honorários base, notas, guias/multas, Zen, pendências |
 | `src/zen.js` | Webhook do Questor Zen (`ZEN_WEBHOOK_TOKEN`) e portal do cliente (`PORTAL_CLIENTES=1`) |
 | `src/backup.js`, `scripts/` | Backup diário, redefinição de senha |
-| `public/app.js`, `styles.css` | Telas; identidade visual (tokens de cor no topo do CSS) |
+| `public/app.js`, `styles.css` | Telas; menu lateral por seções (`itensDoMenu`), gráficos em SVG (`svg()`, `graficoColunas`); identidade visual (tokens de cor no topo do CSS) |
 | `deploy/`, `docs/IMPLANTACAO.md` | Docker + Caddy (HTTPS) na VPS Hostinger, `painel.contabilizatech.com.br` |
+
+## Reformulação (portal de gestão, em fases)
+
+Base: o protótipo Next.js "portal-contabil", refeito nesta stack. Fase 1 (feita): clientes com regime
+(`REGIMES`), CPF de autônomo, endereço, contrato e observações; menu lateral; dashboard em `#/`
+(o antigo painel do mês está em `#/painel-notas`). Próximas: 2) demandas e vencimentos;
+3) honorários e receita; 4) multas com status e pesquisas NPS/CSAT. As notas fiscais continuam.
 
 ## Convenções
 
