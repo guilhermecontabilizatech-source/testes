@@ -225,7 +225,7 @@ dialog.extra-largo { width: min(1120px, 96vw); }
 .acoes-rapidas { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-bottom: 18px; }
 button.acao-rapida {
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px; text-align: left;
-  padding: 14px 16px; border-radius: var(--raio); background: var(--azul); font-weight: 400;
+  padding: 14px 16px; border-radius: var(--raio); background: var(--azul); font-weight: 400; white-space: normal;
 }
 button.acao-rapida strong { font-family: var(--fonte-titulo); font-size: 15px; }
 button.acao-rapida span { font-size: 13px; opacity: .85; }
@@ -244,6 +244,12 @@ td.acima { background: color-mix(in srgb, var(--rejeitada) 9%, white); color: va
 
 .legenda { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
 table.relatorio td { font-size: 14px; }
+/* ---------- demandas e vencimentos ---------- */
+.atrasado { color: var(--rejeitada); font-weight: 600; }
+.indicador.selecionado { box-shadow: 0 0 0 2px var(--cor); }
+.caixas { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0 14px; margin-bottom: 4px; }
+.caixas label.checkbox { padding-bottom: 6px; }
+
 /* ---------- dashboard ---------- */
 .colunas-iguais { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 @media (max-width: 1000px) { .colunas-iguais { grid-template-columns: minmax(0, 1fr); } }

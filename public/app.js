@@ -28,7 +28,8 @@ const ROTULOS_HISTORICO = {
 };
 
 let usuario = null;
-let opcoes = { canais: {}, regimes: {}, ufs: [], acesso_clientes: false, portal_clientes: false, clientes_entram: false };
+let opcoes = {
+  canais: {}, regimes: {}, ufs: [], tributos: {}, situacoes_vencimento: {}, tipos_demanda: {}, prioridades: {}, status_demanda: {}, acesso_clientes: false, portal_clientes: false, clientes_entram: false };
 const conteudo = document.getElementById('conteudo');
 
 // Cria elementos DOM de forma segura (texto nunca é interpretado como HTML).
@@ -495,7 +496,7 @@ async function abrirFormularioEmpresa(e = {}) {
 // Exclusão de empresa: mostra o que será apagado junto e, se houver registros, exige digitar EXCLUIR.
 async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
   const dep = await api(`/api/empresas/${e.id}/dependencias`);
-  const temDados = dep.notas || dep.ocorrencias || dep.usuarios;
+  const temDados = dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos;
   const dialogo = abrirDialogo(h('form', {
     onsubmit: aoEnviar(async (dados) => {
       await api(`/api/empresas/${e.id}`, { metodo: 'DELETE', dados: { confirmacao: dados.confirmacao ?? '' } });
@@ -512,9 +513,11 @@ async function abrirExclusaoEmpresa(e, { aoExcluir } = {}) {
       h('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } },
         dep.notas ? h('li', {}, `${dep.notas} nota(s) fiscal(is)`) : null,
         dep.ocorrencias ? h('li', {}, `${dep.ocorrencias} guia(s) recalculada(s)/multa(s)`) : null,
+        dep.demandas ? h('li', {}, `${dep.demandas} demanda(s)`) : null,
+        dep.vencimentos ? h('li', {}, `${dep.vencimentos} vencimento(s)`) : null,
         dep.arquivos ? h('li', {}, `${dep.arquivos} arquivo(s) anexado(s)`) : null,
         dep.usuarios ? h('li', {}, `${dep.usuarios} acesso(s) de cliente`) : null))
-    : h('p', { class: 'suave' }, 'Esta empresa não tem notas nem ocorrências registradas.'),
+    : h('p', { class: 'suave' }, 'Esta empresa não tem notas, ocorrências, demandas nem vencimentos registrados.'),
   temDados ? h('p', { class: 'suave' },
     'Se a empresa só deixou de ser cliente, prefira ', h('strong', {}, 'Editar → Situação: Inativa'),
     ': ela some das listas de lançamento, mas o histórico continua no relatório.') : null,
@@ -644,6 +647,8 @@ async function abrirExclusaoLote(empresas) {
       h('li', {}, `${previa.empresas} empresa(s)`),
       h('li', {}, `${previa.notas} nota(s) fiscal(is)`),
       h('li', {}, `${previa.ocorrencias} guia(s) recalculada(s)/multa(s)`),
+      previa.demandas ? h('li', {}, `${previa.demandas} demanda(s)`) : null,
+      previa.vencimentos ? h('li', {}, `${previa.vencimentos} vencimento(s)`) : null,
       h('li', {}, `${previa.arquivos} arquivo(s) anexado(s)`),
       previa.usuarios ? h('li', {}, `${previa.usuarios} acesso(s) de cliente`) : null)),
   h('p', { class: 'suave' }, 'O backup da madrugada guarda os dados até ontem; o que foi lançado hoje não tem cópia.'),
@@ -1079,13 +1084,18 @@ async function telaPerfilEmpresa(id, query) {
     inicio: filtros.get('inicio') || PERIODO_PADRAO.inicio,
     fim: filtros.get('fim') || PERIODO_PADRAO.fim,
   });
-  const [empresas, rel, notas, ocorrencias, op] = await Promise.all([
+  const [empresas, rel, notas, ocorrencias, op, demandas, vencimentos] = await Promise.all([
     api('/api/empresas'),
     api(`/api/relatorio?${periodo}&empresa_id=${id}`),
     api(`/api/solicitacoes?${periodo}&empresa_id=${id}`),
     api(`/api/ocorrencias?${periodo}&empresa_id=${id}`),
     obterOpcoesOcorrencia(),
+    api(`/api/demandas?empresa_id=${id}`),
+    api(`/api/vencimentos?mes=&empresa_id=${id}`),
   ]);
+  // No perfil: vencimentos pendentes (inclusive vencidos) e os 5 últimos já resolvidos.
+  const pendentes = vencimentos.lista.filter((v) => v.status === 'pendente');
+  const resolvidos = vencimentos.lista.filter((v) => v.status !== 'pendente').slice(-5);
   const e = empresas.find((x) => String(x.id) === String(id));
   if (!e) throw new Error('Empresa não encontrada.');
   const r = rel.empresas[0];
@@ -1114,12 +1124,25 @@ async function telaPerfilEmpresa(id, query) {
         h('a', { href: '#/empresas' }, '← Clientes'))),
     cartaoCadastro(e),
     h('div', { class: 'acoes-rapidas' },
-      h('button', { class: 'acao-rapida destaque', onclick: () => abrirDialogoNota(e) },
+      h('button', { class: 'acao-rapida destaque', onclick: () => abrirFormularioDemanda({}, e) },
+        h('strong', {}, 'Nova demanda'), h('span', {}, 'Pedido, declaração, certidão…')),
+      h('button', { class: 'acao-rapida', onclick: () => abrirFormularioVencimento({}, e) },
+        h('strong', {}, 'Novo vencimento'), h('span', {}, 'Guia a pagar, com valor e data')),
+      h('button', { class: 'acao-rapida', onclick: () => abrirDialogoNota(e) },
         h('strong', {}, 'Registrar nota emitida'), h('span', {}, 'Com XML, os dados são lidos sozinhos')),
       h('button', { class: 'acao-rapida roxo', onclick: () => abrirDialogoOcorrencia('guia_recalculada', e) },
         h('strong', {}, 'Registrar guia recalculada'), h('span', {}, 'Anexe a nova guia e informe o motivo')),
       h('button', { class: 'acao-rapida escuro', onclick: () => abrirDialogoOcorrencia('multa', e) },
         h('strong', {}, 'Registrar multa'), h('span', {}, 'Anexe a guia da multa, motivo e causa'))),
+    h('h2', {}, 'Demandas em aberto'),
+    demandas.lista.length
+      ? h('div', { style: { marginBottom: '20px' } }, tabelaDemandas(demandas.lista, { mostrarCliente: false }))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma demanda em aberto.'),
+    h('h2', {}, 'Vencimentos'),
+    pendentes.length || resolvidos.length
+      ? h('div', { style: { marginBottom: '20px' } }, tabelaVencimentos([...resolvidos, ...pendentes], { mostrarCliente: false }))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum vencimento cadastrado.'),
+    h('h2', {}, 'Notas, guias recalculadas e multas'),
     h('form', {
       class: 'filtros',
       onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl(`empresa/${id}`, dadosFormulario(ev.target)); },
@@ -1272,6 +1295,30 @@ async function telaRelatorio(query) {
       `Notas contam pela data de emissão. Honorário por demanda = honorário do período ÷ (notas + guias + multas): quanto menor, mais trabalho o cliente dá pelo que paga. Alerta de plano: cliente sem plano com média de ${String(rel.limites.mediaNotasSemPlano).replace('.', ',')} ou mais notas/mês, ou com plano que passou da franquia em algum mês.`));
 }
 
+const rotuloPerfil = (u) => (u.papel === 'cliente' ? 'Cliente' : u.admin ? 'Administrador' : u.gestor ? 'Gestor' : 'Colaborador');
+const perfilDe = (u) => (u.admin ? 'admin' : u.gestor ? 'gestor' : 'colaborador');
+const PERFIS_EQUIPE = [
+  ['colaborador', 'Colaborador — altera as próprias demandas'],
+  ['gestor', 'Gestor — altera e exclui demandas e vencimentos de todos'],
+  ['admin', 'Administrador — tudo, inclusive perfis e exclusão em lote'],
+];
+
+function abrirPerfilUsuario(u) {
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/usuarios/${u.id}`, { metodo: 'PUT', dados: { nome: u.nome, ativo: Boolean(u.ativo), perfil: dados.perfil } });
+      dialogo.close();
+      avisar('Perfil alterado.');
+      rotear();
+    }),
+  },
+  h('h2', {}, `Perfil de ${u.nome}`),
+  h('div', { class: 'grade' }, campo('Perfil na equipe', { tag: 'select', name: 'perfil', valor: perfilDe(u), opcoes: PERFIS_EQUIPE }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
 async function telaUsuarios() {
   const [usuarios, empresas] = await Promise.all([api('/api/usuarios'), api('/api/empresas')]);
 
@@ -1290,25 +1337,15 @@ async function telaUsuarios() {
     campo('E-mail *', { type: 'email', name: 'email', required: true }),
     campo('Senha inicial *', { type: 'text', name: 'senha', required: true, minlength: 8, autocomplete: 'new-password' }),
     opcoes.clientes_entram
-      ? [campo('Perfil', { tag: 'select', name: 'papel', opcoes: [['escritorio', 'Equipe do escritório'], ['cliente', 'Cliente (empresa)']] }),
+      ? [campo('Tipo de acesso', { tag: 'select', name: 'papel', opcoes: [['escritorio', 'Equipe do escritório'], ['cliente', 'Cliente (empresa)']] }),
         campo('Empresa (para clientes)', { tag: 'select', name: 'empresa_id', opcoes: [['', '—'], ...empresas.map((e) => [e.id, e.razao_social])] })]
       : h('input', { type: 'hidden', name: 'papel', value: 'escritorio' }),
-    usuario.admin ? h('label', { class: 'checkbox' }, h('input', { type: 'checkbox', name: 'admin', value: '1' }), 'Administrador (pode excluir em lote e gerenciar administradores)') : null),
+    usuario.admin ? campo('Perfil na equipe', { tag: 'select', name: 'perfil', valor: 'colaborador', opcoes: PERFIS_EQUIPE }) : null),
   h('div', { class: 'acoes' }, h('button', { type: 'submit' }, 'Criar usuário')));
 
   const alternarAtivo = async (u) => {
     try {
       await api(`/api/usuarios/${u.id}`, { metodo: 'PUT', dados: { nome: u.nome, ativo: !u.ativo } });
-      rotear();
-    } catch (err) {
-      avisar(err.message, 'erro');
-    }
-  };
-  const alternarAdmin = async (u) => {
-    const acao = u.admin ? 'remover o perfil de administrador de' : 'tornar administrador(a)';
-    if (!confirm(`Deseja ${acao} ${u.nome}?`)) return;
-    try {
-      await api(`/api/usuarios/${u.id}`, { metodo: 'PUT', dados: { nome: u.nome, ativo: Boolean(u.ativo), admin: !u.admin } });
       rotear();
     } catch (err) {
       avisar(err.message, 'erro');
@@ -1333,14 +1370,15 @@ async function telaUsuarios() {
       h('tbody', {}, usuarios.map((u) => h('tr', {},
         h('td', {}, u.nome),
         h('td', {}, u.email),
-        h('td', {}, u.papel === 'escritorio' ? 'Escritório' : 'Cliente',
-          u.admin ? h('div', {}, h('span', { class: 'etiqueta', style: { '--cor': 'var(--rosa)' } }, 'Administrador')) : null),
+        h('td', {}, u.papel === 'escritorio'
+          ? etiquetaCor(rotuloPerfil(u), u.admin ? 'var(--rosa)' : u.gestor ? 'var(--roxo)' : 'var(--azul)')
+          : 'Cliente'),
         h('td', {}, u.empresa_nome ?? '—'),
         h('td', {}, u.ativo ? 'Ativo' : 'Inativo'),
         h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
           h('button', { class: 'secundario', onclick: () => redefinirSenha(u) }, 'Redefinir senha'),
           usuario.admin && u.papel === 'escritorio' && u.id !== usuario.id
-            && h('button', { class: 'secundario', onclick: () => alternarAdmin(u) }, u.admin ? 'Remover admin' : 'Tornar admin'),
+            && h('button', { class: 'secundario', onclick: () => abrirPerfilUsuario(u) }, 'Alterar perfil'),
           u.id !== usuario.id && h('button', { class: 'secundario', onclick: () => alternarAtivo(u) }, u.ativo ? 'Desativar' : 'Reativar')))))))));
 }
 
@@ -1820,6 +1858,455 @@ async function telaNotas(query) {
 }
 
 // ---------------------------------------------------------------------------
+// Demandas
+// ---------------------------------------------------------------------------
+
+const ehGestor = () => Boolean(usuario.admin || usuario.gestor);
+const etiquetaCor = (texto, cor) => h('span', { class: 'etiqueta', style: { '--cor': cor } }, texto);
+const CORES_STATUS_DEMANDA = {
+  aberta: 'var(--azul)', em_andamento: 'var(--azul-claro)', aguardando_cliente: 'var(--pendente)',
+  concluida: 'var(--emitida)', cancelada: 'var(--cancelada)',
+};
+const CORES_PRIORIDADE = { urgente: 'var(--rosa)', alta: 'var(--roxo)', media: 'var(--azul)', baixa: 'var(--cancelada)' };
+const etiquetaStatusDemanda = (s) => etiquetaCor(opcoes.status_demanda[s] ?? s, CORES_STATUS_DEMANDA[s]);
+const etiquetaPrioridade = (p) => etiquetaCor(opcoes.prioridades[p] ?? p, CORES_PRIORIDADE[p]);
+const rotuloTipoDemanda = (d) => rotuloComOutro(opcoes.tipos_demanda, d.tipo, d.tipo_outro);
+const prazoDemanda = (d) => (d.prazo
+  ? h('span', { class: d.atrasada ? 'atrasado' : null }, data(d.prazo), d.atrasada ? ' · atrasada' : '')
+  : h('span', { class: 'suave' }, 'sem prazo'));
+
+async function abrirFormularioDemanda(d = {}, empresaFixa = null) {
+  const [empresas, equipe] = await Promise.all([empresaFixa ? [] : api('/api/empresas'), equipeDoEscritorio()]);
+  const tipo = campo('Tipo *', {
+    tag: 'select', name: 'tipo', required: true, valor: d.tipo ?? '',
+    opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.tipos_demanda)],
+  });
+  const canal = campo('Pedido recebido por', {
+    tag: 'select', name: 'canal', valor: d.canal ?? '', opcoes: [['', '—'], ...Object.entries(opcoes.canais)],
+  });
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      if (empresaFixa) dados.empresa_id = empresaFixa.id;
+      if (d.id) await api(`/api/demandas/${d.id}`, { metodo: 'PUT', dados });
+      else await api('/api/demandas', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar(d.id ? 'Demanda atualizada.' : 'Demanda criada.');
+      rotear();
+    }),
+  },
+  h('h2', {}, d.id ? 'Editar demanda' : `Nova demanda${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`),
+  h('div', { class: 'grade' },
+    empresaFixa ? null : campo('Cliente *', {
+      tag: 'select', name: 'empresa_id', required: true, valor: d.empresa_id ?? '',
+      opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo || e.id === d.empresa_id).map((e) => [e.id, e.razao_social])],
+    }, { inteira: true }),
+    campo('Título *', { name: 'titulo', required: true, maxlength: 200, valor: d.titulo, placeholder: 'Ex.: CND federal para licitação' }, { inteira: true }),
+    comOutro(tipo, 'tipo_outro', { valor: d.tipo_outro ?? '', rotulo: 'Qual tipo' }),
+    campo('Prioridade', { tag: 'select', name: 'prioridade', valor: d.prioridade ?? 'media', opcoes: Object.entries(opcoes.prioridades) }),
+    campo('Responsável', {
+      tag: 'select', name: 'responsavel_id', valor: d.id ? d.responsavel_id ?? '' : usuario.id,
+      opcoes: [['', '— sem responsável —'], ...equipe.map((u) => [u.id, u.nome])],
+    }),
+    campo('Prazo', { type: 'date', name: 'prazo', valor: d.prazo }),
+    comOutro(canal, 'canal_outro', { valor: d.canal_outro ?? '', rotulo: 'Qual canal' }),
+    campo('Descrição', { tag: 'textarea', name: 'descricao', maxlength: 4000, valor: d.descricao }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+  dialogo.classList.add('largo');
+}
+
+async function mudarStatusDemanda(d, status) {
+  const enviar = (mensagem) => api(`/api/demandas/${d.id}/status`, { metodo: 'POST', dados: { status, mensagem } });
+  if (status !== 'cancelada' && status !== 'concluida') {
+    try {
+      await enviar(null);
+      rotear();
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+    return;
+  }
+  // Concluir aceita uma observação; cancelar exige o motivo.
+  const cancelar = status === 'cancelada';
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await enviar(dados.mensagem);
+      dialogo.close();
+      rotear();
+    }),
+  },
+  h('h2', {}, cancelar ? 'Cancelar demanda' : 'Concluir demanda'),
+  h('p', { class: 'suave' }, d.titulo),
+  h('div', { class: 'grade' },
+    campo(cancelar ? 'Motivo do cancelamento *' : 'Observação (opcional)', {
+      tag: 'textarea', name: 'mensagem', required: cancelar, maxlength: 2000,
+    }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit', class: cancelar ? 'perigo' : null }, cancelar ? 'Cancelar demanda' : 'Concluir'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Voltar'))));
+}
+
+// Botões de status conforme a situação atual da demanda.
+function acoesStatusDemanda(d) {
+  const botao = (status, rotulo, classe = 'secundario') => h('button', { class: classe, onclick: () => mudarStatusDemanda(d, status) }, rotulo);
+  if (['concluida', 'cancelada'].includes(d.status)) return [botao('aberta', 'Reabrir')];
+  return [
+    d.status !== 'em_andamento' ? botao('em_andamento', 'Iniciar') : null,
+    d.status !== 'aguardando_cliente' ? botao('aguardando_cliente', 'Aguardando cliente') : null,
+    botao('concluida', 'Concluir', ''),
+    botao('cancelada', 'Cancelar'),
+  ];
+}
+
+function tabelaDemandas(lista, { mostrarCliente = true } = {}) {
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Prazo', 'Demanda', mostrarCliente ? 'Cliente' : null, 'Prioridade', 'Status', 'Responsável']
+      .filter(Boolean).map((t) => h('th', {}, t)))),
+    h('tbody', {}, lista.map((d) => h('tr', { class: 'clicavel', onclick: () => { location.hash = `#/demanda/${d.id}`; } },
+      h('td', {}, prazoDemanda(d)),
+      h('td', {}, h('a', { href: `#/demanda/${d.id}` }, h('strong', {}, d.titulo)),
+        h('div', { class: 'suave' }, rotuloTipoDemanda(d), d.comentarios ? ` · ${d.comentarios} comentário(s)` : '')),
+      mostrarCliente ? h('td', {}, d.empresa_nome) : null,
+      h('td', {}, etiquetaPrioridade(d.prioridade)),
+      h('td', {}, etiquetaStatusDemanda(d.status)),
+      h('td', {}, d.responsavel_nome ?? h('span', { class: 'suave' }, 'sem responsável')))))));
+}
+
+async function telaDemandas(query) {
+  const filtros = new URLSearchParams(query);
+  const [{ lista, resumo }, empresas, equipe] = await Promise.all([
+    api(`/api/demandas?${filtros}`), api('/api/empresas'), equipeDoEscritorio(),
+  ]);
+  const status = filtros.get('status') || 'abertas';
+  const indicador = (valor, numero, rotulo, cor) => h('div', {
+    class: `indicador${status === valor ? ' selecionado' : ''}`, style: { '--cor': cor },
+    onclick: () => { filtros.set('status', status === valor ? 'abertas' : valor); location.hash = `#/demandas?${filtros}`; },
+  }, h('div', { class: 'numero' }, numero), h('div', { class: 'rotulo' }, rotulo));
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, 'Demandas'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'destaque', onclick: () => abrirFormularioDemanda() }, '+ Nova demanda'))),
+    h('div', { class: 'indicadores' },
+      indicador('aberta', resumo.aberta, 'Abertas', CORES_STATUS_DEMANDA.aberta),
+      indicador('em_andamento', resumo.em_andamento, 'Em andamento', CORES_STATUS_DEMANDA.em_andamento),
+      indicador('aguardando_cliente', resumo.aguardando_cliente, 'Aguardando cliente', CORES_STATUS_DEMANDA.aguardando_cliente),
+      indicador('atrasadas', resumo.atrasadas, 'Com prazo vencido', 'var(--rosa)'),
+      indicador('concluida', resumo.concluida, 'Concluídas', CORES_STATUS_DEMANDA.concluida)),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => { ev.preventDefault(); filtrosNaUrl('demandas', dadosFormulario(ev.target)); },
+      onchange: (ev) => { if (ev.target.tagName === 'SELECT') ev.currentTarget.requestSubmit(); },
+    },
+    campo('Situação', {
+      tag: 'select', name: 'status', valor: status,
+      opcoes: [['abertas', 'Em aberto'], ['atrasadas', 'Com prazo vencido'], ...Object.entries(opcoes.status_demanda), ['todas', 'Todas']],
+    }),
+    campo('Responsável', {
+      tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'),
+      opcoes: [['', 'Toda a equipe'], ['eu', 'Minhas'], ['nenhum', 'Sem responsável'], ...equipe.map((u) => [u.id, u.nome])],
+    }),
+    campo('Cliente', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todos'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+    campo('Prioridade', { tag: 'select', name: 'prioridade', valor: filtros.get('prioridade'), opcoes: [['', 'Todas'], ...Object.entries(opcoes.prioridades)] }),
+    campo('Busca', { type: 'search', name: 'busca', valor: filtros.get('busca'), placeholder: 'Título, descrição, cliente…' }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Filtrar')),
+    lista.length
+      ? h('div', {}, h('p', { class: 'suave' }, `${lista.length} demanda(s)`), tabelaDemandas(lista))
+      : h('div', { class: 'cartao vazio' }, 'Nenhuma demanda neste filtro.'));
+}
+
+async function telaDemanda(id) {
+  const d = await api(`/api/demandas/${id}`);
+  const excluir = async () => {
+    if (!confirm(`Excluir a demanda "${d.titulo}" e todo o histórico?`)) return;
+    try {
+      await api(`/api/demandas/${d.id}`, { metodo: 'DELETE', dados: {} });
+      avisar('Demanda excluída.');
+      location.hash = '#/demandas';
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+  };
+  const assumir = async () => {
+    try {
+      await api(`/api/demandas/${d.id}`, { metodo: 'PUT', dados: { ...d, responsavel_id: usuario.id } });
+      rotear();
+    } catch (err) {
+      avisar(err.message, 'erro');
+    }
+  };
+  const item = (rotulo, valor, inteira = false) => h('div', { class: inteira ? 'inteira' : null },
+    h('dt', {}, rotulo), h('dd', {}, valor || h('span', { class: 'suave' }, '—')));
+  const rotuloEvento = (ev) => {
+    if (ev.acao.startsWith('status:')) return `Status: ${opcoes.status_demanda[ev.acao.slice(7)]}`;
+    return { criada: 'Demanda criada', editada: 'Demanda alterada', comentario: 'Comentário' }[ev.acao] ?? ev.acao;
+  };
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('div', {}, h('h1', {}, d.titulo), h('div', { class: 'acoes', style: { marginTop: '6px' } },
+        etiquetaStatusDemanda(d.status), etiquetaPrioridade(d.prioridade), d.atrasada ? etiquetaCor('Prazo vencido', 'var(--rejeitada)') : null)),
+      h('a', { href: '#/demandas' }, '← Demandas')),
+    h('div', { class: 'colunas' },
+      h('div', {},
+        h('div', { class: 'cartao' },
+          h('dl', { class: 'detalhes' },
+            item('Cliente', h('a', { href: `#/empresa/${d.empresa_id}` }, d.empresa_nome)),
+            item('Tipo', rotuloTipoDemanda(d)),
+            item('Prazo', d.prazo ? prazoDemanda(d) : null),
+            item('Responsável', d.responsavel_nome),
+            item('Pedido recebido por', d.canal ? rotuloComOutro(opcoes.canais, d.canal, d.canal_outro) : null),
+            item('Criada por', `${d.criado_por_nome ?? '—'} · ${dataHora(d.criado_em)}`),
+            d.concluida_em ? item('Concluída em', data(d.concluida_em)) : null,
+            item('Descrição', d.descricao, true))),
+        d.pode_alterar
+          ? h('div', { class: 'cartao' }, h('h2', {}, 'Ações'),
+            h('div', { class: 'acoes', style: { marginTop: 0 } },
+              acoesStatusDemanda(d),
+              d.responsavel_id !== usuario.id ? h('button', { class: 'secundario', onclick: assumir }, 'Assumir') : null,
+              h('button', { class: 'secundario', onclick: () => abrirFormularioDemanda(d) }, 'Editar'),
+              d.pode_excluir ? h('button', { class: 'secundario', onclick: excluir }, 'Excluir') : null))
+          : h('div', { class: 'alerta info' }, `Esta demanda está com ${d.responsavel_nome}. Só o responsável, quem criou ou um gestor altera; você pode comentar.`)),
+      h('div', { class: 'cartao' },
+        h('h2', {}, 'Histórico e comentários'),
+        h('ul', { class: 'linha-tempo' }, d.historico.map((ev) => h('li', {},
+          h('div', {}, h('strong', {}, rotuloEvento(ev))),
+          h('div', { class: 'quando' }, `${ev.usuario_nome ?? 'Sistema'} · ${dataHora(ev.criado_em)}`),
+          ev.mensagem && h('div', { class: 'msg' }, ev.mensagem)))),
+        h('form', {
+          style: { marginTop: '12px' },
+          onsubmit: aoEnviar(async (dados) => {
+            await api(`/api/demandas/${d.id}/comentarios`, { metodo: 'POST', dados });
+            rotear();
+          }),
+        },
+        campo('Adicionar comentário', { tag: 'textarea', name: 'mensagem', required: true, maxlength: 4000, placeholder: 'Andamento, retorno do cliente…' }),
+        h('div', { class: 'acoes' }, h('button', { type: 'submit', class: 'secundario' }, 'Comentar'))))));
+}
+
+// ---------------------------------------------------------------------------
+// Vencimentos
+// ---------------------------------------------------------------------------
+
+const CORES_SITUACAO_VENCIMENTO = { a_vencer: 'var(--azul)', vencido: 'var(--rejeitada)', pago: 'var(--emitida)', cancelado: 'var(--cancelada)' };
+const etiquetaSituacao = (s) => etiquetaCor(opcoes.situacoes_vencimento[s] ?? s, CORES_SITUACAO_VENCIMENTO[s]);
+const rotuloTributo = (v) => rotuloComOutro(opcoes.tributos, v.tributo, v.tributo_outro);
+const mesAnterior = () => {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+
+async function abrirFormularioVencimento(v = {}, empresaFixa = null) {
+  const empresas = empresaFixa ? [] : await api('/api/empresas');
+  const tributo = campo('Tributo *', {
+    tag: 'select', name: 'tributo', required: true, valor: v.tributo ?? '', opcoes: [['', 'Selecione…'], ...Object.entries(opcoes.tributos)],
+  });
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      if (empresaFixa) dados.empresa_id = empresaFixa.id;
+      if (v.id) await api(`/api/vencimentos/${v.id}`, { metodo: 'PUT', dados });
+      else await api('/api/vencimentos', { metodo: 'POST', dados });
+      dialogo.close();
+      avisar('Vencimento salvo.');
+      rotear();
+    }),
+  },
+  h('h2', {}, v.id ? 'Editar vencimento' : `Novo vencimento${empresaFixa ? ` — ${empresaFixa.razao_social}` : ''}`),
+  h('div', { class: 'grade' },
+    empresaFixa ? null : campo('Cliente *', {
+      tag: 'select', name: 'empresa_id', required: true, valor: v.empresa_id ?? '',
+      opcoes: [['', 'Selecione…'], ...empresas.filter((e) => e.ativo || e.id === v.empresa_id).map((e) => [e.id, e.razao_social])],
+    }, { inteira: true }),
+    comOutro(tributo, 'tributo_outro', { valor: v.tributo_outro ?? '', rotulo: 'Qual tributo' }),
+    campo('Competência', { type: 'month', name: 'competencia', valor: v.competencia ?? (v.id ? '' : mesAnterior()) }),
+    campo('Vencimento *', { type: 'date', name: 'vencimento', required: true, valor: v.vencimento }),
+    campo('Valor (R$)', { name: 'valor', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(v.valor_centavos) }),
+    campo('Descrição', { name: 'descricao', maxlength: 200, valor: v.descricao, placeholder: 'Ex.: parcela 3/10' }),
+    campo('Código de barras', { name: 'codigo_barras', maxlength: 100, valor: v.codigo_barras }),
+    campo('Observações', { tag: 'textarea', name: 'observacoes', maxlength: 2000, valor: v.observacoes }, { inteira: true })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar'),
+    // Ações menos frequentes ficam aqui para não lotar a tabela.
+    v.id && v.status === 'pendente' ? h('button', {
+      type: 'button', class: 'secundario',
+      onclick: () => { if (confirm('Cancelar este vencimento (a guia não será mais cobrada)?')) { dialogo.close(); acaoVencimento(v, 'cancelar'); } },
+    }, 'Cancelar vencimento') : null,
+    v.id && ehGestor() ? h('button', { type: 'button', class: 'perigo', onclick: () => { dialogo.close(); excluirVencimento(v); } }, 'Excluir') : null)));
+}
+
+async function acaoVencimento(v, acao, dados = {}) {
+  try {
+    await api(`/api/vencimentos/${v.id}/acao`, { metodo: 'POST', dados: { acao, ...dados } });
+    rotear();
+  } catch (err) {
+    avisar(err.message, 'erro');
+  }
+}
+
+function abrirPagamento(v) {
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/vencimentos/${v.id}/acao`, { metodo: 'POST', dados: { acao: 'pagar', ...dados } });
+      dialogo.close();
+      avisar('Pagamento registrado.');
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Confirmar pagamento'),
+  h('p', { class: 'suave' }, `${v.empresa_nome} · ${rotuloTributo(v)} · vence em ${data(v.vencimento)}`),
+  h('div', { class: 'grade' },
+    campo('Pago em *', { type: 'date', name: 'data', required: true, valor: hoje() }),
+    campo('Valor pago (R$)', { name: 'valor', inputmode: 'decimal', placeholder: '0,00', valor: reaisCampo(v.valor_centavos) })),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Confirmar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+}
+
+async function excluirVencimento(v) {
+  if (!confirm(`Excluir ${rotuloTributo(v)} de ${v.empresa_nome} (vence em ${data(v.vencimento)})?`)) return;
+  try {
+    await api(`/api/vencimentos/${v.id}`, { metodo: 'DELETE', dados: {} });
+    avisar('Vencimento excluído.');
+    rotear();
+  } catch (err) {
+    avisar(err.message, 'erro');
+  }
+}
+
+// Gera o mesmo vencimento para todos os clientes ativos dos regimes escolhidos, com prévia.
+function abrirGeracaoVencimentos() {
+  const tributo = campo('Tributo *', {
+    tag: 'select', name: 'tributo', required: true, valor: 'das', opcoes: Object.entries(opcoes.tributos),
+  });
+  const caixas = [...Object.entries(opcoes.regimes), ['sem_regime', 'Regime não informado']].map(([valor, rotulo]) => h('label', { class: 'checkbox' },
+    h('input', { type: 'checkbox', name: 'regimes', value: valor, checked: valor === 'simples_nacional' }), rotulo));
+  const resultado = h('div', {});
+  const ler = (form) => ({
+    ...dadosFormulario(form),
+    regimes: [...form.querySelectorAll('input[name=regimes]:checked')].map((c) => c.value),
+  });
+  // Sugere os regimes de cada tributo mais comum.
+  tributo.querySelector('select').addEventListener('change', (ev) => {
+    const sugestao = { das: ['simples_nacional'], das_mei: ['mei'] }[ev.target.value];
+    if (sugestao) for (const c of caixas) c.querySelector('input').checked = sugestao.includes(c.querySelector('input').value);
+  });
+
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados, form) => {
+      const r = await api('/api/vencimentos/gerar', { metodo: 'POST', dados: ler(form) });
+      dialogo.close();
+      avisar(`${r.criados} vencimento(s) criado(s)${r.ignorados ? `; ${r.ignorados} já existia(m)` : ''}.`);
+      rotear();
+    }),
+  },
+  h('h2', {}, 'Gerar vencimentos do mês'),
+  h('p', { class: 'suave' }, 'Cria o mesmo vencimento para cada cliente ativo dos regimes marcados. Quem já tem esse tributo na competência fica de fora; os valores você completa depois, guia a guia.'),
+  h('div', { class: 'grade' },
+    comOutro(tributo, 'tributo_outro', { rotulo: 'Qual tributo' }),
+    campo('Competência *', { type: 'month', name: 'competencia', required: true, valor: mesAnterior() }),
+    campo('Vencimento *', { type: 'date', name: 'vencimento', required: true })),
+  h('h3', {}, 'Regimes'),
+  h('div', { class: 'caixas' }, caixas),
+  resultado,
+  h('div', { class: 'acoes' },
+    h('button', {
+      type: 'button', class: 'secundario',
+      onclick: async (ev) => {
+        const form = ev.target.closest('form');
+        if (!form.reportValidity()) return;
+        try {
+          const p = await api('/api/vencimentos/gerar/previa', { metodo: 'POST', dados: ler(form) });
+          resultado.replaceChildren(h('div', { class: 'alerta info' },
+            h('strong', {}, `${p.novos} vencimento(s) novo(s)`), p.existentes ? `, ${p.existentes} cliente(s) já têm.` : '.',
+            p.empresas.length ? h('div', { class: 'suave', style: { marginTop: '6px' } },
+              p.empresas.filter((e) => !e.existente).slice(0, 12).map((e) => e.razao_social).join(', '),
+              p.novos > 12 ? '…' : '') : null));
+        } catch (err) {
+          resultado.replaceChildren(h('div', { class: 'alerta erro' }, err.message));
+        }
+      },
+    }, 'Ver prévia'),
+    h('button', { type: 'submit' }, 'Gerar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Cancelar'))));
+  dialogo.classList.add('largo');
+}
+
+function tabelaVencimentos(lista, { mostrarCliente = true } = {}) {
+  return h('div', { class: 'tabela' }, h('table', {},
+    h('thead', {}, h('tr', {}, ['Vencimento', mostrarCliente ? 'Cliente' : null, 'Tributo', 'Valor', 'Situação', '']
+      .filter((t) => t !== null).map((t) => h('th', { class: t === 'Valor' ? 'num' : null }, t)))),
+    h('tbody', {}, lista.map((v) => h('tr', {},
+      h('td', {}, h('span', { class: v.situacao === 'vencido' ? 'atrasado' : null }, data(v.vencimento))),
+      mostrarCliente ? h('td', {}, h('a', { href: `#/empresa/${v.empresa_id}` }, v.empresa_nome),
+        v.responsavel_nome ? h('div', { class: 'suave' }, v.responsavel_nome) : null) : null,
+      h('td', {}, rotuloTributo(v), h('div', { class: 'suave' },
+        [v.competencia ? `comp. ${nomeMes(v.competencia)}` : null, v.descricao].filter(Boolean).join(' · '))),
+      h('td', { class: 'num' }, v.situacao === 'pago' && v.valor_pago_centavos != null
+        ? moeda(v.valor_pago_centavos) : v.valor_centavos != null ? moeda(v.valor_centavos) : h('span', { class: 'suave' }, '—')),
+      h('td', {}, etiquetaSituacao(v.situacao), h('div', { class: 'suave' },
+        v.situacao === 'pago' ? `pago em ${data(v.pago_em)}`
+          : v.status === 'pendente' ? (v.enviada_em ? `guia enviada em ${data(v.enviada_em)}` : 'guia não enviada') : '')),
+      h('td', {}, h('div', { class: 'acoes', style: { marginTop: 0 } },
+        v.status === 'pendente' && !v.enviada_em ? h('button', { class: 'secundario', onclick: () => acaoVencimento(v, 'enviar') }, 'Guia enviada') : null,
+        v.status === 'pendente' ? h('button', { onclick: () => abrirPagamento(v) }, 'Pago') : null,
+        v.status !== 'pendente' ? h('button', { class: 'secundario', onclick: () => acaoVencimento(v, 'reabrir') }, 'Reabrir') : null,
+        h('button', { class: 'secundario', onclick: () => abrirFormularioVencimento(v) }, 'Editar'))))))));
+}
+
+async function telaVencimentos(query) {
+  const filtros = new URLSearchParams(query);
+  if (!filtros.has('mes')) filtros.set('mes', hoje().slice(0, 7));
+  const [{ lista, resumo }, empresas, equipe] = await Promise.all([
+    api(`/api/vencimentos?${filtros}`), api('/api/empresas'), equipeDoEscritorio(),
+  ]);
+  const situacao = filtros.get('situacao') || '';
+  const indicador = (valor, rotulo, detalhe) => h('div', {
+    class: `indicador${situacao === valor ? ' selecionado' : ''}`, style: { '--cor': CORES_SITUACAO_VENCIMENTO[valor] },
+    onclick: () => { if (situacao === valor) filtros.delete('situacao'); else filtros.set('situacao', valor); location.hash = `#/vencimentos?${filtros}`; },
+  }, h('div', { class: 'numero' }, resumo[valor].quantidade), h('div', { class: 'rotulo' }, rotulo, ' · ', moeda(resumo[valor].valor_centavos)),
+  detalhe ? h('div', { class: 'suave' }, detalhe) : null);
+  const mes = filtros.get('mes');
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' },
+      h('h1', {}, mes ? `Vencimentos de ${nomeDoMes(mes)}` : 'Vencimentos'),
+      h('div', { class: 'acoes', style: { marginTop: 0 } },
+        h('button', { class: 'secundario', onclick: abrirGeracaoVencimentos }, 'Gerar do mês'),
+        h('button', { class: 'destaque', onclick: () => abrirFormularioVencimento() }, '+ Novo vencimento'))),
+    h('div', { class: 'indicadores' },
+      indicador('a_vencer', 'A vencer', resumo.sem_envio ? `${resumo.sem_envio} guia(s) não enviada(s)` : null),
+      indicador('vencido', 'Vencidos', mes ? 'inclui meses anteriores ao filtrar' : null),
+      indicador('pago', 'Pagos'),
+      indicador('cancelado', 'Cancelados')),
+    h('form', {
+      class: 'filtros',
+      onsubmit: (ev) => {
+        ev.preventDefault();
+        const d = dadosFormulario(ev.target);
+        const novo = new URLSearchParams();
+        for (const [k, v] of Object.entries(d)) if (v || k === 'mes') novo.set(k, v);
+        location.hash = `#/vencimentos?${novo}`;
+      },
+      onchange: (ev) => { if (ev.target.tagName === 'SELECT') ev.currentTarget.requestSubmit(); },
+    },
+    campo('Mês do vencimento', { type: 'month', name: 'mes', valor: mes }),
+    campo('Situação', { tag: 'select', name: 'situacao', valor: situacao, opcoes: [['', 'Todas'], ...Object.entries(opcoes.situacoes_vencimento)] }),
+    campo('Cliente', { tag: 'select', name: 'empresa_id', valor: filtros.get('empresa_id'), opcoes: [['', 'Todos'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+    campo('Tributo', { tag: 'select', name: 'tributo', valor: filtros.get('tributo'), opcoes: [['', 'Todos'], ...Object.entries(opcoes.tributos)] }),
+    campo('Responsável', { tag: 'select', name: 'responsavel_id', valor: filtros.get('responsavel_id'), opcoes: [['', 'Toda a equipe'], ...equipe.map((u) => [u.id, u.nome])] }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Filtrar'),
+    h('a', { href: `#/vencimentos?mes=${situacao ? `&situacao=${situacao}` : ''}`, class: 'botao secundario' }, 'Todos os meses')),
+    lista.length
+      ? h('div', {}, h('p', { class: 'suave' }, `${lista.length} vencimento(s)`), tabelaVencimentos(lista))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum vencimento neste filtro. Use "Gerar do mês" para criar o DAS de todos os clientes do Simples de uma vez.'));
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard (visão geral do escritório)
 // ---------------------------------------------------------------------------
 
@@ -1906,15 +2393,21 @@ async function telaDashboard(query) {
         onchange: (ev) => ev.currentTarget.requestSubmit(),
       }, campo('Mês', { type: 'month', name: 'mes', valor: mes }))),
     h('div', { class: 'acoes-rapidas' },
-      h('button', { class: 'acao-rapida destaque', onclick: () => abrirDialogoNota() },
+      h('button', { class: 'acao-rapida destaque', onclick: () => abrirFormularioDemanda() },
+        h('strong', {}, 'Nova demanda'), h('span', {}, 'Com prazo e responsável')),
+      h('button', { class: 'acao-rapida', onclick: () => abrirFormularioVencimento() },
+        h('strong', {}, 'Novo vencimento'), h('span', {}, 'Guia a pagar do cliente')),
+      h('button', { class: 'acao-rapida roxo', onclick: () => abrirDialogoNota() },
         h('strong', {}, 'Registrar nota'), h('span', {}, 'Com XML, os dados são lidos sozinhos')),
-      h('button', { class: 'acao-rapida roxo', onclick: () => abrirDialogoOcorrencia('guia_recalculada') },
-        h('strong', {}, 'Guia recalculada'), h('span', {}, 'Com a guia anexada')),
       h('button', { class: 'acao-rapida escuro', onclick: () => abrirDialogoOcorrencia('multa') },
-        h('strong', {}, 'Multa'), h('span', {}, 'Com a guia e o motivo')),
-      h('button', { class: 'acao-rapida', onclick: () => abrirFormularioEmpresa() },
-        h('strong', {}, 'Novo cliente'), h('span', {}, 'Cadastro com regime e honorário'))),
+        h('strong', {}, 'Multa'), h('span', {}, 'Com a guia e o motivo'))),
     h('div', { class: 'indicadores seis' },
+      indicador(p.demandas.abertas, 'Demandas em aberto',
+        `${p.demandas.atrasadas} com prazo vencido · ${p.demandas.minhas} com você`, 'var(--rosa)', '#/demandas'),
+      indicador(p.vencimentos.vencidos, 'Vencimentos vencidos',
+        `${p.vencimentos.proximos_7_dias} vencem nos próximos 7 dias`, 'var(--rejeitada)', '#/vencimentos?mes=&situacao=vencido'),
+      indicador(p.vencimentos.pendentes_no_mes, 'Vencimentos do mês a pagar',
+        `${p.vencimentos.pagos_no_mes} já pago(s)`, 'var(--roxo)', `#/vencimentos?mes=${mes}`),
       indicador(p.clientes.ativos, 'Clientes ativos',
         `${p.clientes.novos_no_mes} novo(s) no mês · ${p.clientes.inativos} inativo(s)`, 'var(--azul)', '#/empresas'),
       indicador(moeda(p.honorarios.base_mensal_centavos), 'Honorários mensais (base)',
@@ -1983,6 +2476,9 @@ const ICONES = {
     ['path', { d: 'M23 21v-2a4 4 0 0 0-3-3.87' }], ['path', { d: 'M16 3.13a4 4 0 0 1 0 7.75' }]],
   documentos: [['polyline', { points: '22 12 16 12 14 15 10 15 8 12 2 12' }],
     ['path', { d: 'M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z' }]],
+  demandas: [['path', { d: 'M9 11l3 3L22 4' }], ['path', { d: 'M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11' }]],
+  calendario: [['rect', { x: 3, y: 4, width: 18, height: 18, rx: 2 }], ['line', { x1: 16, y1: 2, x2: 16, y2: 6 }],
+    ['line', { x1: 8, y1: 2, x2: 8, y2: 6 }], ['line', { x1: 3, y1: 10, x2: 21, y2: 10 }]],
   nova: [['circle', { cx: 12, cy: 12, r: 10 }], ['line', { x1: 12, y1: 8, x2: 12, y2: 16 }], ['line', { x1: 8, y1: 12, x2: 16, y2: 12 }]],
 };
 
@@ -1994,7 +2490,8 @@ function itensDoMenu() {
   if (usuario.papel === 'escritorio') {
     return [
       ['Visão geral', [['#/', 'Dashboard', 'inicio'], ['#/painel-notas', 'Painel de notas', 'painel']]],
-      ['Operação', [['#/notas', 'Notas', 'nota'], ['#/ocorrencias', 'Guias e multas', 'alerta'], ['#/relatorio', 'Relatório', 'grafico']]],
+      ['Operação', [['#/demandas', 'Demandas', 'demandas'], ['#/vencimentos', 'Vencimentos', 'calendario'], ['#/notas', 'Notas', 'nota'],
+        ['#/ocorrencias', 'Guias e multas', 'alerta'], ['#/relatorio', 'Relatório', 'grafico']]],
       ['Cadastros', [['#/empresas', 'Clientes', 'clientes'], ['#/usuarios', 'Usuários', 'usuarios']]],
       ['Integrações', [['#/zen', 'Questor Zen', 'documentos']]],
     ];
@@ -2009,6 +2506,7 @@ function montarMenu(caminho) {
     if (href === '#/') return caminho === '/' || (usuario.papel !== 'escritorio' && caminho.startsWith('/solicitacao'));
     if (href === '#/notas') return caminho === '/notas' || caminho.startsWith('/solicitacao');
     if (href === '#/empresas') return caminho === '/empresas' || caminho.startsWith('/empresa/');
+    if (href === '#/demandas') return caminho === '/demandas' || caminho.startsWith('/demanda/');
     return `#${caminho}` === href;
   };
   document.getElementById('menu').replaceChildren(...itensDoMenu().map(([secao, itens]) => h('div', { class: 'secao-menu' },
@@ -2017,7 +2515,7 @@ function montarMenu(caminho) {
   document.body.classList.remove('menu-aberto');
   document.getElementById('nome-usuario').textContent = usuario.empresa
     ? `${usuario.nome} · ${usuario.empresa.razao_social}`
-    : usuario.nome;
+    : `${usuario.nome} · ${rotuloPerfil(usuario)}`;
   document.body.classList.remove('tela-login');
   document.body.classList.add('com-lateral');
   document.getElementById('topo').hidden = false;
@@ -2047,6 +2545,9 @@ async function rotear() {
     if ((m = caminho.match(/^\/solicitacao\/(\d+)$/))) return await telaDetalhe(m[1]);
     if (caminho === '/notas' && escritorio) return await telaNotas(query);
     if (caminho === '/painel-notas' && escritorio) return await telaPainelMes(query);
+    if (caminho === '/demandas' && escritorio) return await telaDemandas(query);
+    if ((m = caminho.match(/^\/demanda\/(\d+)$/)) && escritorio) return await telaDemanda(m[1]);
+    if (caminho === '/vencimentos' && escritorio) return await telaVencimentos(query);
     if (caminho === '/empresas' && escritorio) return await telaEmpresas();
     if (caminho === '/usuarios' && escritorio) return await telaUsuarios();
     if (caminho === '/ocorrencias' && escritorio) return await telaOcorrencias(query);

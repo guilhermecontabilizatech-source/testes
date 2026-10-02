@@ -12,7 +12,7 @@ function mesesAte(mes, quantidade) {
 }
 
 // Indicadores do dashboard (visão geral do escritório num mês).
-function calcularPainel(db, mes) {
+function calcularPainel(db, mes, { hoje, usuarioId = null }) {
   const meses = mesesAte(mes, 6);
   const umValor = (sql, ...params) => db.prepare(sql).get(...params).n ?? 0;
 
@@ -79,23 +79,47 @@ function calcularPainel(db, mes) {
     sem_empresa: umValor('SELECT COUNT(*) AS n FROM zen_documentos WHERE empresa_id IS NULL'),
   };
 
+  const emAberto = "status NOT IN ('concluida', 'cancelada')";
+  const demandas = {
+    abertas: umValor(`SELECT COUNT(*) AS n FROM demandas WHERE ${emAberto}`),
+    atrasadas: umValor(`SELECT COUNT(*) AS n FROM demandas WHERE ${emAberto} AND prazo < ?`, hoje),
+    minhas: umValor(`SELECT COUNT(*) AS n FROM demandas WHERE ${emAberto} AND responsavel_id = ?`, usuarioId),
+    sem_responsavel: umValor(`SELECT COUNT(*) AS n FROM demandas WHERE ${emAberto} AND responsavel_id IS NULL`),
+    concluidas_no_mes: umValor("SELECT COUNT(*) AS n FROM demandas WHERE status = 'concluida' AND substr(concluida_em, 1, 7) = ?", mes),
+  };
+
+  // Daqui a 7 dias (AAAA-MM-DD), para os vencimentos próximos.
+  const emSeteDias = new Date(Date.parse(`${hoje}T12:00:00Z`) + 7 * 86400000).toISOString().slice(0, 10);
+  const vencimentos = {
+    vencidos: umValor("SELECT COUNT(*) AS n FROM vencimentos WHERE status = 'pendente' AND vencimento < ?", hoje),
+    proximos_7_dias: umValor("SELECT COUNT(*) AS n FROM vencimentos WHERE status = 'pendente' AND vencimento BETWEEN ? AND ?", hoje, emSeteDias),
+    proximos_sem_envio: umValor(`SELECT COUNT(*) AS n FROM vencimentos
+      WHERE status = 'pendente' AND enviada_em IS NULL AND vencimento BETWEEN ? AND ?`, hoje, emSeteDias),
+    pendentes_no_mes: umValor("SELECT COUNT(*) AS n FROM vencimentos WHERE status = 'pendente' AND substr(vencimento, 1, 7) = ?", mes),
+    pagos_no_mes: umValor("SELECT COUNT(*) AS n FROM vencimentos WHERE status = 'pago' AND substr(vencimento, 1, 7) = ?", mes),
+  };
+
   // Pendências de cadastro e de operação, com o link da tela que resolve cada uma.
   const alertas = [];
   const alerta = (quantidade, texto, link) => { if (quantidade) alertas.push({ quantidade, texto, link }); };
+  alerta(vencimentos.vencidos, 'vencimento(s) vencido(s) sem pagamento confirmado', '#/vencimentos?situacao=vencido');
+  alerta(vencimentos.proximos_sem_envio, 'guia(s) vencendo em até 7 dias ainda não enviada(s) ao cliente', '#/vencimentos?situacao=a_vencer');
+  alerta(demandas.atrasadas, 'demanda(s) com prazo vencido', '#/demandas?status=atrasadas');
+  alerta(demandas.sem_responsavel, 'demanda(s) em aberto sem responsável', '#/demandas?responsavel_id=nenhum');
   alerta(operacao.notas_abertas, 'pedido(s) de nota ainda não emitido(s)', '#/notas?mes=');
   alerta(clientes.sem_regime, 'cliente(s) ativo(s) sem regime tributário', '#/empresas');
   alerta(clientes.sem_honorario, 'cliente(s) ativo(s) sem honorário cadastrado', '#/empresas');
   alerta(clientes.sem_responsavel, 'cliente(s) ativo(s) sem responsável no escritório', '#/empresas');
   alerta(zen.sem_empresa, 'documento(s) do Questor Zen sem empresa associada', '#/zen');
 
-  return { mes, meses, clientes, honorarios, operacao, zen, serie, alertas };
+  return { mes, meses, clientes, honorarios, operacao, zen, demandas, vencimentos, serie, alertas };
 }
 
 function registrarRotasPainel({ rota, db, hoje }) {
-  rota('GET', '/api/painel', ({ query }) => {
+  rota('GET', '/api/painel', ({ query, usuario }) => {
     const mes = query.get('mes') || hoje().slice(0, 7);
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) throw new ErroValidacao('Mês inválido.');
-    return calcularPainel(db, mes);
+    return calcularPainel(db, mes, { hoje: hoje(), usuarioId: usuario.id });
   }, { papel: 'escritorio' });
 }
 

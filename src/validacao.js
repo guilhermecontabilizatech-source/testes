@@ -133,8 +133,11 @@ function lerRegime(valor) {
 const UFS = ['AC', 'AL', 'AM', 'AP', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MG', 'MS', 'MT', 'PA', 'PB', 'PE', 'PI', 'PR',
   'RJ', 'RN', 'RO', 'RR', 'RS', 'SC', 'SE', 'SP', 'TO'];
 
+// Data AAAA-MM-DD que existe no calendário (recusa 31/02, que o Date.parse aceitaria).
 function dataValidaISO(valor) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(valor) && !Number.isNaN(Date.parse(valor));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(valor)) return false;
+  const d = new Date(`${valor}T12:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === valor;
 }
 
 // Nota fiscal registrada pelo escritório: só número e data de emissão são obrigatórios.

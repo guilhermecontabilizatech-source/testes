@@ -5,9 +5,11 @@ const path = require('node:path');
 const auth = require('./auth');
 const { transacao } = require('./db');
 const { paraCsv } = require('./csv');
-const { registrarRotasOperacionais } = require('./operacional');
+const { registrarRotasOperacionais, TRIBUTOS } = require('./operacional');
 const { registrarRotasZen } = require('./zen');
 const { registrarRotasPainel } = require('./painel');
+const { registrarRotasDemandas, TIPOS_DEMANDA, PRIORIDADES, STATUS_DEMANDA } = require('./demandas');
+const { registrarRotasVencimentos, SITUACOES_VENCIMENTO } = require('./vencimentos');
 const { prepararArquivo, prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 const { lerXmlNota } = require('./xmlNota');
 const { criarLimitador } = require('./limitador');
@@ -79,10 +81,13 @@ function criarApp({
 
   const rotas = [];
   // portal: rota liberada ao cliente que só tem o portal de documentos;
-  // bruto: corpo lido pelo handler (webhook), sem a exigência de JSON.
-  const rota = (metodo, padrao, handler, { publica = false, papel = null, admin = false, portal = false, bruto = false } = {}) => {
+  // bruto: corpo lido pelo handler (webhook), sem a exigência de JSON;
+  // gestor: só gestores e administradores.
+  const rota = (metodo, padrao, handler, {
+    publica = false, papel = null, admin = false, gestor = false, portal = false, bruto = false,
+  } = {}) => {
     const regex = new RegExp(`^${padrao.replace(/\./g, '\\.').replace(/:(\w+)/g, '(?<$1>\\d+)')}$`);
-    rotas.push({ metodo, regex, handler, publica, papel, admin, portal, bruto });
+    rotas.push({ metodo, regex, handler, publica, papel, admin, gestor, portal, bruto });
   };
 
   // ---------- utilitários ----------
@@ -232,7 +237,8 @@ function criarApp({
   }, { portal: true });
 
   rota('GET', '/api/opcoes', () => ({
-    canais: CANAIS_PEDIDO, regimes: REGIMES, ufs: UFS, acesso_clientes: acessoClientes, portal_clientes: portalClientes, clientes_entram: clientesEntram,
+    canais: CANAIS_PEDIDO, regimes: REGIMES, ufs: UFS, tributos: TRIBUTOS, situacoes_vencimento: SITUACOES_VENCIMENTO,
+    tipos_demanda: TIPOS_DEMANDA, prioridades: PRIORIDADES, status_demanda: STATUS_DEMANDA, acesso_clientes: acessoClientes, portal_clientes: portalClientes, clientes_entram: clientesEntram,
   }), { portal: true });
 
   rota('GET', '/api/me', ({ usuario }) => {
@@ -421,6 +427,8 @@ function criarApp({
       arquivos: conta('SELECT COUNT(*) AS n FROM anexos a JOIN solicitacoes s ON s.id = a.solicitacao_id WHERE s.empresa_id = ?')
         + conta('SELECT COUNT(*) AS n FROM ocorrencia_anexos a JOIN ocorrencias o ON o.id = a.ocorrencia_id WHERE o.empresa_id = ?'),
       usuarios: conta('SELECT COUNT(*) AS n FROM usuarios WHERE empresa_id = ?'),
+      demandas: conta('SELECT COUNT(*) AS n FROM demandas WHERE empresa_id = ?'),
+      vencimentos: conta('SELECT COUNT(*) AS n FROM vencimentos WHERE empresa_id = ?'),
     };
   }
 
@@ -441,6 +449,8 @@ function criarApp({
         );
         db.prepare('DELETE FROM solicitacoes WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM ocorrencias WHERE empresa_id = ?').run(id);
+        db.prepare('DELETE FROM demandas WHERE empresa_id = ?').run(id);
+        db.prepare('DELETE FROM vencimentos WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM usuarios WHERE empresa_id = ?').run(id);
         db.prepare('DELETE FROM empresas WHERE id = ?').run(id);
       }
@@ -449,10 +459,10 @@ function criarApp({
   }
 
   function somarDependencias(ids) {
-    const total = { empresas: ids.length, notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0 };
+    const total = { empresas: ids.length, notas: 0, ocorrencias: 0, arquivos: 0, usuarios: 0, demandas: 0, vencimentos: 0 };
     for (const id of ids) {
       const dep = dependenciasEmpresa(id);
-      for (const chave of ['notas', 'ocorrencias', 'arquivos', 'usuarios']) total[chave] += dep[chave];
+      for (const chave of Object.keys(dep)) total[chave] += dep[chave];
     }
     return total;
   }
@@ -462,7 +472,7 @@ function criarApp({
     const empresa = db.prepare('SELECT id FROM empresas WHERE id = ?').get(params.id);
     if (!empresa) throw new ErroValidacao('Empresa não encontrada.', 404);
     const dep = dependenciasEmpresa(empresa.id);
-    if ((dep.notas || dep.ocorrencias || dep.usuarios) && corpo.confirmacao !== 'EXCLUIR') {
+    if ((dep.notas || dep.ocorrencias || dep.usuarios || dep.demandas || dep.vencimentos) && corpo.confirmacao !== 'EXCLUIR') {
       throw new ErroValidacao('Esta empresa tem registros. Digite EXCLUIR para confirmar.', 409);
     }
     apagarEmpresas([empresa.id]);
@@ -504,10 +514,23 @@ function criarApp({
   // ---------- usuários ----------
 
   rota('GET', '/api/usuarios', () => db.prepare(`
-    SELECT u.id, u.nome, u.email, u.papel, u.empresa_id, u.ativo, u.admin, u.criado_em, e.razao_social AS empresa_nome
+    SELECT u.id, u.nome, u.email, u.papel, u.empresa_id, u.ativo, u.admin, u.gestor, u.criado_em, e.razao_social AS empresa_nome
     FROM usuarios u LEFT JOIN empresas e ON e.id = u.empresa_id
     ORDER BY u.papel DESC, u.nome
   `).all().map((l) => ({ ...l })), { papel: 'escritorio' });
+
+  // Perfil na equipe: colaborador, gestor ou administrador. Aceita também o campo antigo "admin".
+  const marcado = (v) => v === true || v === 1 || v === '1';
+  function lerPerfil(corpo) {
+    if (corpo.perfil !== undefined) {
+      if (!['colaborador', 'gestor', 'admin'].includes(corpo.perfil)) throw new ErroValidacao('Perfil inválido.');
+      return { admin: corpo.perfil === 'admin', gestor: corpo.perfil === 'gestor' };
+    }
+    return {
+      admin: corpo.admin === undefined ? undefined : marcado(corpo.admin),
+      gestor: corpo.gestor === undefined ? undefined : marcado(corpo.gestor),
+    };
+  }
 
   rota('POST', '/api/usuarios', ({ corpo, usuario }) => {
     const nome = texto('Nome', corpo.nome, { obrigatorio: true, max: 200 });
@@ -525,10 +548,12 @@ function criarApp({
     const senha = String(corpo.senha ?? '');
     if (senha.length < 8) throw new ErroValidacao('A senha deve ter pelo menos 8 caracteres.');
     try {
-      // Só um administrador pode criar outro administrador.
-      const admin = papel === 'escritorio' && usuario.admin && (corpo.admin === true || corpo.admin === '1') ? 1 : 0;
-      const r = db.prepare('INSERT INTO usuarios (nome, email, senha_hash, papel, empresa_id, admin) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(nome, email, auth.gerarHash(senha), papel, empresaId, admin);
+      // Só um administrador define o perfil de gestor ou administrador; os demais criam colaboradores.
+      const perfil = lerPerfil(corpo);
+      const admin = papel === 'escritorio' && usuario.admin && perfil.admin ? 1 : 0;
+      const gestor = papel === 'escritorio' && usuario.admin && !admin && perfil.gestor ? 1 : 0;
+      const r = db.prepare('INSERT INTO usuarios (nome, email, senha_hash, papel, empresa_id, admin, gestor) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(nome, email, auth.gerarHash(senha), papel, empresaId, admin, gestor);
       return { id: Number(r.lastInsertRowid) };
     } catch (err) {
       return erroUnico(err, 'Já existe um usuário com este e-mail.');
@@ -544,18 +569,26 @@ function criarApp({
     if (corpo.senha && String(corpo.senha).length < 8) {
       throw new ErroValidacao('A senha deve ter pelo menos 8 caracteres.');
     }
+    const perfil = lerPerfil(corpo);
     let admin = alvo.admin;
-    if (corpo.admin !== undefined && Boolean(corpo.admin) !== Boolean(alvo.admin)) {
+    if (perfil.admin !== undefined && perfil.admin !== Boolean(alvo.admin)) {
       if (!usuario.admin) throw new ErroValidacao('Só um administrador pode alterar o perfil de administrador.', 403);
       if (alvo.papel !== 'escritorio') throw new ErroValidacao('Clientes não podem ser administradores.');
       if (alvo.id === usuario.id) throw new ErroValidacao('Você não pode remover o seu próprio perfil de administrador.');
-      admin = corpo.admin ? 1 : 0;
+      admin = perfil.admin ? 1 : 0;
     }
+    let gestor = alvo.gestor;
+    if (perfil.gestor !== undefined && perfil.gestor !== Boolean(alvo.gestor)) {
+      if (!usuario.admin) throw new ErroValidacao('Só um administrador pode alterar o perfil de gestor.', 403);
+      if (alvo.papel !== 'escritorio') throw new ErroValidacao('Clientes não podem ser gestores.');
+      gestor = perfil.gestor ? 1 : 0;
+    }
+    if (admin) gestor = 0;
     if (alvo.admin && !ativo) {
       const outros = db.prepare("SELECT COUNT(*) AS n FROM usuarios WHERE admin = 1 AND ativo = 1 AND id <> ?").get(alvo.id).n;
       if (!outros) throw new ErroValidacao('Não é possível desativar o único administrador.');
     }
-    db.prepare('UPDATE usuarios SET nome = ?, ativo = ?, admin = ? WHERE id = ?').run(nome, ativo, admin, alvo.id);
+    db.prepare('UPDATE usuarios SET nome = ?, ativo = ?, admin = ?, gestor = ? WHERE id = ?').run(nome, ativo, admin, gestor, alvo.id);
     if (corpo.senha) {
       db.prepare('UPDATE usuarios SET senha_hash = ? WHERE id = ?').run(auth.gerarHash(String(corpo.senha)), alvo.id);
     }
@@ -843,6 +876,8 @@ function criarApp({
 
   registrarRotasZen({ rota, db, pastaArquivos, tokenWebhook: zenWebhookToken });
   registrarRotasPainel({ rota, db, hoje: hojeBrasilia });
+  registrarRotasDemandas({ rota, db, hoje: hojeBrasilia });
+  registrarRotasVencimentos({ rota, db, hoje: hojeBrasilia });
 
   // ---------- servidor HTTP ----------
 
@@ -930,6 +965,7 @@ function criarApp({
       }
       if (r.papel && usuario.papel !== r.papel) throw new ErroValidacao('Acesso restrito ao escritório.', 403);
       if (r.admin && !usuario.admin) throw new ErroValidacao('Ação permitida só para administradores.', 403);
+      if (r.gestor && !usuario.admin && !usuario.gestor) throw new ErroValidacao('Ação permitida só para gestores e administradores.', 403);
 
       // Proteção contra CSRF: requisições que alteram dados precisam vir como JSON.
       if (req.method !== 'GET' && !r.bruto && !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
