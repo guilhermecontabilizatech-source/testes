@@ -243,3 +243,13 @@ ul.sinais li { font-size: 13px; padding: 3px 0 3px 10px; border-left: 3px solid 
   .cabecalho-impressao { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
   .cabecalho-impressao img { height: 30px; }
 }
+
+/* Portal do cliente: documentos recebidos do Questor Zen */
+.docs-portal { display: grid; gap: 10px; }
+.doc-portal { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0; }
+.doc-portal-texto { display: grid; gap: 4px; min-width: 0; }
+.doc-portal-dados { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+@media (max-width: 600px) {
+  .doc-portal { flex-direction: column; align-items: stretch; }
+  .doc-portal .botao { text-align: center; }
+}

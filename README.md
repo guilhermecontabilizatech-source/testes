@@ -24,6 +24,10 @@ cliente, mês e responsável, com a identidade visual da marca.
 - **Responsável por cliente**: cada empresa tem uma pessoa da equipe; painel, notas e relatório
   filtram por responsável.
 
+- **Questor Zen**: os documentos postados no Zen chegam pelo webhook, são ligados à empresa e
+  aparecem no **portal do cliente** (*Meus documentos*), ligado com `PORTAL_CLIENTES=1`. Veja a
+  seção 10 de [`docs/IMPLANTACAO.md`](docs/IMPLANTACAO.md).
+
 O acesso de clientes ao sistema vem **desligado** (variável `ACESSO_CLIENTES`). Ligado, os
 clientes podem abrir solicitações e acompanhar o andamento, como na primeira versão.
 
@@ -64,6 +68,8 @@ ADMIN_EMAIL=voce@seuescritorio.com.br ADMIN_SENHA='uma-senha-forte' npm start
 | `ADMIN_SENHA`   | (gerada aleatoriamente)    | Senha do primeiro administrador                    |
 | `COOKIE_SEGURO` | —                          | Use `1` em produção com HTTPS                      |
 | `ACESSO_CLIENTES` | —                        | Use `1` para permitir login de clientes            |
+| `PORTAL_CLIENTES` | —                        | Use `1` para clientes verem só os documentos do Zen |
+| `ZEN_WEBHOOK_TOKEN` | —                      | Token do webhook do Questor Zen (liga o recebimento) |
 | `CONFIAR_PROXY` | —                          | Use `1` atrás de proxy (Caddy) para obter o IP real |
 | `BACKUP_DIR`    | `DATA_DIR/backups`         | Pasta dos backups diários                          |
 | `BACKUP_HORA`   | `3`                        | Hora do backup diário (Brasília)                   |
@@ -189,6 +195,7 @@ src/
   xmlNota.js    leitura de XML de NF-e e NFS-e
   arquivos.js   validação e gravação de anexos
   importacao.js leitura de planilhas e PDFs para importar empresas
+  zen.js        webhook do Questor Zen e portal de documentos do cliente
 public/         interface web (HTML/CSS/JS, sem build)
 test/           testes automatizados (node --test)
 ```

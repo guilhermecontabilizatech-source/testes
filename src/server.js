@@ -34,6 +34,8 @@ const app = criarApp({
   cookieSeguro: process.env.COOKIE_SEGURO === '1',
   confiarProxy: process.env.CONFIAR_PROXY === '1',
   acessoClientes: process.env.ACESSO_CLIENTES === '1',
+  portalClientes: process.env.PORTAL_CLIENTES === '1',
+  zenWebhookToken: process.env.ZEN_WEBHOOK_TOKEN || null,
 });
 
 // Limpa sessões expiradas a cada hora.

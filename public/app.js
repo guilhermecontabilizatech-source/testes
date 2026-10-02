@@ -28,7 +28,7 @@ const ROTULOS_HISTORICO = {
 };
 
 let usuario = null;
-let opcoes = { canais: {}, acesso_clientes: false };
+let opcoes = { canais: {}, acesso_clientes: false, portal_clientes: false, clientes_entram: false };
 const conteudo = document.getElementById('conteudo');
 
 // Cria elementos DOM de forma segura (texto nunca é interpretado como HTML).
@@ -1215,7 +1215,7 @@ async function telaUsuarios() {
     campo('Nome *', { name: 'nome', required: true }),
     campo('E-mail *', { type: 'email', name: 'email', required: true }),
     campo('Senha inicial *', { type: 'text', name: 'senha', required: true, minlength: 8, autocomplete: 'new-password' }),
-    opcoes.acesso_clientes
+    opcoes.clientes_entram
       ? [campo('Perfil', { tag: 'select', name: 'papel', opcoes: [['escritorio', 'Equipe do escritório'], ['cliente', 'Cliente (empresa)']] }),
         campo('Empresa (para clientes)', { tag: 'select', name: 'empresa_id', opcoes: [['', '—'], ...empresas.map((e) => [e.id, e.razao_social])] })]
       : h('input', { type: 'hidden', name: 'papel', value: 'escritorio' }),
@@ -1268,6 +1268,151 @@ async function telaUsuarios() {
           usuario.admin && u.papel === 'escritorio' && u.id !== usuario.id
             && h('button', { class: 'secundario', onclick: () => alternarAdmin(u) }, u.admin ? 'Remover admin' : 'Tornar admin'),
           u.id !== usuario.id && h('button', { class: 'secundario', onclick: () => alternarAtivo(u) }, u.ativo ? 'Desativar' : 'Reativar')))))))));
+}
+
+// ---------------------------------------------------------------------------
+// Questor Zen (documentos recebidos pelo webhook) e portal do cliente
+// ---------------------------------------------------------------------------
+
+const ROTULOS_ASSOCIACAO = {
+  email: 'pelo e-mail do usuário',
+  cnpj: 'pelo CNPJ',
+  nome: 'pelo nome',
+  anterior: 'como no documento anterior',
+  manual: 'pela equipe',
+};
+
+const competenciaTexto = (c) => (c ? `${c.slice(5, 7)}/${c.slice(0, 4)}` : '');
+
+function linkArquivoZen(d) {
+  if (d.tem_arquivo) return h('a', { href: `/api/zen/documentos/${d.id}/arquivo` }, d.nome_arquivo ?? 'Baixar');
+  return null;
+}
+
+async function abrirDocumentoZen(id, empresas) {
+  const d = await api(`/api/zen/documentos/${id}`);
+  const link = /^Link recebido: (https:\/\/\S+)$/.exec(d.arquivo_info ?? '');
+  const linha = (rotulo, valor) => (valor ? h('div', {}, h('span', { class: 'suave' }, `${rotulo}: `), valor) : null);
+  const dialogo = abrirDialogo(h('form', {
+    onsubmit: aoEnviar(async (dados) => {
+      await api(`/api/zen/documentos/${id}/empresa`, { metodo: 'PUT', dados: { empresa_id: dados.empresa_id || null } });
+      dialogo.close();
+      avisar('Empresa do documento atualizada.');
+      rotear();
+    }),
+  },
+  h('h2', {}, d.titulo ?? 'Documento do Zen'),
+  h('div', { class: 'peq', style: { display: 'grid', gap: '4px', marginBottom: '12px' } },
+    linha('Categoria', d.categoria),
+    linha('Cliente no Zen', d.cliente_nome),
+    linha('E-mails de destino', d.destinatarios_emails),
+    linha('Vencimento', data(d.vencimento)),
+    linha('Competência', competenciaTexto(d.competencia)),
+    linha('Valor', d.valor_centavos != null ? moeda(d.valor_centavos) : null),
+    linha('Observação', d.observacao),
+    linha('Situação no Zen', d.status),
+    linha('ID no Zen', d.zen_id),
+    linha('Recebido em', dataHora(d.recebido_em)),
+    linha('Formato recebido', d.tipo_conteudo),
+    linha('Arquivo', d.tem_arquivo ? linkArquivoZen(d) : null)),
+  d.arquivo_info ? h('div', { class: 'alerta info' }, link ? ['Link recebido: ', h('a', { href: link[1], target: '_blank', rel: 'noopener' }, link[1])] : d.arquivo_info) : null,
+  campo('Empresa (quem vê no portal)', {
+    tag: 'select', name: 'empresa_id', valor: d.empresa_id ?? '',
+    opcoes: [['', '— sem empresa —'], ...empresas.map((e) => [e.id, e.razao_social])],
+  }),
+  h('p', { class: 'suave peq' }, d.empresa_id && d.associacao ? `Associada ${ROTULOS_ASSOCIACAO[d.associacao] ?? ''}. ` : '',
+    'Ao associar manualmente, os próximos documentos do mesmo cliente do Zen vão para a mesma empresa.'),
+  h('details', {}, h('summary', {}, 'Dados recebidos do Zen'),
+    h('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: '300px', overflow: 'auto', fontSize: '12px' } }, d.payload)),
+  h('div', { class: 'acoes' },
+    h('button', { type: 'submit' }, 'Salvar empresa'),
+    usuario.admin && h('button', {
+      type: 'button', class: 'perigo',
+      onclick: async () => {
+        if (!confirm('Apagar este documento recebido do sistema? (No Zen ele continua.)')) return;
+        await api(`/api/zen/documentos/${id}`, { metodo: 'DELETE', dados: {} });
+        dialogo.close();
+        avisar('Documento apagado.');
+        rotear();
+      },
+    }, 'Apagar'),
+    h('button', { type: 'button', class: 'secundario', onclick: () => dialogo.close() }, 'Fechar'))));
+}
+
+async function telaZen() {
+  const [status, docs, empresas] = await Promise.all([api('/api/zen/status'), api('/api/zen/documentos'), api('/api/empresas')]);
+  const urlWebhook = `${location.origin}/api/zen/webhook`;
+
+  const configuracao = h('div', { class: 'cartao' },
+    h('h2', {}, 'Webhook do Questor Zen'),
+    status.webhook_configurado
+      ? h('div', { class: 'alerta sucesso' }, 'Recebimento ligado. ',
+        status.ultimo_recebimento ? `Último documento recebido em ${dataHora(status.ultimo_recebimento)}.` : 'Nenhum documento recebido ainda.')
+      : h('div', { class: 'alerta erro' }, 'Recebimento desligado: falta a variável ZEN_WEBHOOK_TOKEN no servidor (veja docs/IMPLANTACAO.md).'),
+    h('p', {}, 'No Questor Zen, em ', h('strong', {}, 'Configurações Gerais'), ', informe:'),
+    h('ul', {},
+      h('li', {}, 'URL de retorno: ', h('code', {}, urlWebhook)),
+      h('li', {}, 'Autenticação: ', h('strong', {}, 'Bearer Token'), ' com o valor de ZEN_WEBHOOK_TOKEN.')),
+    h('p', { class: 'suave peq' },
+      'Cada documento postado no Zen chega aqui e é ligado à empresa pelo e-mail do usuário cliente, pelo CNPJ ou pelo nome. ',
+      'Os que ficarem sem empresa aparecem destacados: abra e escolha a empresa.'),
+    !opcoes.clientes_entram ? h('p', { class: 'suave peq' },
+      'O portal do cliente está desligado; ligue com PORTAL_CLIENTES=1 para os clientes verem os documentos.') : null,
+    usuario.admin && status.webhook_configurado ? h('form', {
+      class: 'filtros', style: { marginTop: '12px' },
+      onsubmit: aoEnviar(async (dados) => {
+        const r = await api('/api/zen/teste', { metodo: 'POST', dados });
+        avisar(r.empresa_id ? 'Documento de teste recebido e associado.' : 'Documento de teste recebido.');
+        rotear();
+      }),
+    },
+    campo('Simular um envio do Zen para', { tag: 'select', name: 'empresa_id', required: true, opcoes: [['', 'Escolha a empresa…'], ...empresas.map((e) => [e.id, e.razao_social])] }),
+    h('button', { type: 'submit', class: 'secundario' }, 'Simular recebimento')) : null);
+
+  const tabela = docs.length
+    ? h('div', { class: 'tabela' }, h('table', {},
+      h('thead', {}, h('tr', {}, ['Recebido em', 'Documento', 'Cliente no Zen', 'Empresa', 'Vencimento', 'Valor', 'Arquivo'].map((t) => h('th', {}, t)))),
+      h('tbody', {}, docs.map((d) => h('tr', { class: 'clicavel', onclick: (ev) => { if (ev.target.tagName !== 'A') abrirDocumentoZen(d.id, empresas); } },
+        h('td', {}, dataHora(d.recebido_em)),
+        h('td', {}, d.titulo ?? '—', h('div', { class: 'suave' }, d.categoria ?? '')),
+        h('td', {}, d.cliente_nome ?? '—', d.destinatarios_emails ? h('div', { class: 'suave' }, d.destinatarios_emails) : null),
+        h('td', {}, d.empresa_id
+          ? d.empresa_nome
+          : h('span', { class: 'etiqueta', style: { '--cor': 'var(--rejeitada)' } }, 'Sem empresa')),
+        h('td', {}, data(d.vencimento)),
+        h('td', { class: 'num' }, d.valor_centavos != null ? moeda(d.valor_centavos) : ''),
+        h('td', {}, linkArquivoZen(d) ?? h('span', { class: 'suave', title: d.arquivo_info ?? '' }, 'sem arquivo')))))))
+    : h('div', { class: 'cartao vazio' }, 'Nenhum documento recebido do Zen ainda.');
+
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' }, h('h1', {}, 'Questor Zen'),
+      status.sem_empresa ? h('span', { class: 'etiqueta', style: { '--cor': 'var(--rejeitada)' } }, `${status.sem_empresa} sem empresa`) : null),
+    configuracao,
+    h('h2', {}, `Documentos recebidos (${docs.length})`),
+    tabela);
+}
+
+async function telaPortalDocumentos() {
+  const docs = await api('/api/portal/documentos');
+  const detalhe = (rotulo, valor) => (valor ? h('span', {}, h('span', { class: 'suave' }, `${rotulo} `), valor) : null);
+  renderizar(
+    h('div', { class: 'cabecalho-pagina' }, h('h1', {}, 'Meus documentos'),
+      h('span', { class: 'suave' }, usuario.empresa?.razao_social ?? '')),
+    docs.length
+      ? h('div', { class: 'docs-portal' }, docs.map((d) => h('div', { class: 'cartao doc-portal' },
+        h('div', { class: 'doc-portal-texto' },
+          h('strong', {}, d.titulo ?? 'Documento'),
+          d.categoria ? h('div', { class: 'suave peq' }, d.categoria) : null,
+          h('div', { class: 'doc-portal-dados peq' },
+            detalhe('Competência', competenciaTexto(d.competencia)),
+            detalhe('Vencimento', data(d.vencimento)),
+            detalhe('Valor', d.valor_centavos != null ? moeda(d.valor_centavos) : null),
+            detalhe('Recebido em', data(d.recebido_em))),
+          d.observacao ? h('div', { class: 'suave peq' }, d.observacao) : null),
+        d.tem_arquivo
+          ? h('a', { class: 'botao', href: `/api/zen/documentos/${d.id}/arquivo` }, 'Baixar')
+          : h('span', { class: 'suave peq' }, 'sem arquivo'))))
+      : h('div', { class: 'cartao vazio' }, 'Nenhum documento disponível ainda. Os documentos enviados pelo escritório aparecem aqui.'));
 }
 
 function telaSenha() {
@@ -1612,8 +1757,10 @@ async function carregarUsuario() {
 function montarMenu(caminho) {
   const itens = usuario.papel === 'escritorio'
     ? [['#/', 'Painel'], ['#/notas', 'Notas'], ['#/ocorrencias', 'Ocorrências'], ['#/relatorio', 'Relatório'],
-      ['#/empresas', 'Empresas'], ['#/usuarios', 'Usuários']]
-    : [['#/', 'Minhas solicitações'], ['#/nova', 'Nova solicitação']];
+      ['#/empresas', 'Empresas'], ['#/usuarios', 'Usuários'], ['#/zen', 'Questor Zen']]
+    : opcoes.acesso_clientes
+      ? [['#/', 'Minhas solicitações'], ['#/nova', 'Nova solicitação'], ['#/documentos', 'Meus documentos']]
+      : [['#/', 'Meus documentos']];
   const ativo = (href) => {
     if (href === '#/') return caminho === '/' || (usuario.papel !== 'escritorio' && caminho.startsWith('/solicitacao'));
     if (href === '#/notas') return caminho === '/notas' || caminho.startsWith('/solicitacao');
@@ -1638,8 +1785,15 @@ async function rotear() {
 
   try {
     let m;
-    if (!caminho || caminho === '/') return escritorio ? await telaPainelMes(query) : await telaSolicitacoesCliente(query);
+    if (!caminho || caminho === '/') {
+      if (escritorio) return await telaPainelMes(query);
+      return opcoes.acesso_clientes ? await telaSolicitacoesCliente(query) : await telaPortalDocumentos();
+    }
     if (caminho === '/login') { location.hash = '#/'; return; }
+    if (caminho === '/senha') return telaSenha();
+    if (caminho === '/documentos' && !escritorio) return await telaPortalDocumentos();
+    if (caminho === '/zen' && escritorio) return await telaZen();
+    if (!escritorio && !opcoes.acesso_clientes) { location.hash = '#/'; return; }
     if (caminho === '/nova') return await telaFormulario(null);
     if ((m = caminho.match(/^\/solicitacao\/(\d+)\/editar$/))) return await telaFormulario(m[1]);
     if ((m = caminho.match(/^\/solicitacao\/(\d+)$/))) return await telaDetalhe(m[1]);

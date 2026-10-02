@@ -100,6 +100,35 @@ CREATE TABLE IF NOT EXISTS ocorrencia_anexos (
   criado_em TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Documentos recebidos do Questor Zen pelo webhook (postados no Zen para o cliente).
+CREATE TABLE IF NOT EXISTS zen_documentos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  zen_id TEXT,
+  empresa_id INTEGER REFERENCES empresas(id) ON DELETE SET NULL,
+  associacao TEXT,
+  titulo TEXT,
+  categoria TEXT,
+  categoria_id TEXT,
+  status TEXT,
+  observacao TEXT,
+  cliente_nome TEXT,
+  destinatarios_emails TEXT,
+  data_criacao TEXT,
+  vencimento TEXT,
+  competencia TEXT,
+  valor_centavos INTEGER,
+  nome_arquivo TEXT,
+  arquivo TEXT,
+  tipo_mime TEXT,
+  tamanho INTEGER,
+  arquivo_info TEXT,
+  tipo_conteudo TEXT,
+  payload TEXT NOT NULL,
+  recebido_em TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_zen_documentos_empresa ON zen_documentos(empresa_id);
+CREATE INDEX IF NOT EXISTS idx_zen_documentos_zen_id ON zen_documentos(zen_id);
+
 CREATE TABLE IF NOT EXISTS anexos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   solicitacao_id INTEGER NOT NULL REFERENCES solicitacoes(id) ON DELETE CASCADE,

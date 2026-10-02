@@ -6,6 +6,7 @@ const auth = require('./auth');
 const { transacao } = require('./db');
 const { paraCsv } = require('./csv');
 const { registrarRotasOperacionais } = require('./operacional');
+const { registrarRotasZen } = require('./zen');
 const { prepararArquivo, prepararArquivos, gravarArquivos, apagarArquivos, lerArquivo, cabecalhosDownload } = require('./arquivos');
 const { lerXmlNota } = require('./xmlNota');
 const { criarLimitador } = require('./limitador');
@@ -65,13 +66,18 @@ const DATA_NOTA = "COALESCE(s.data_emissao, date(s.criado_em, '-3 hours'))";
 
 function criarApp({
   db, pastaArquivos, cookieSeguro = false, confiarProxy = false, limitador = criarLimitador(), acessoClientes = false,
+  portalClientes = false, zenWebhookToken = null,
 }) {
   fs.mkdirSync(pastaArquivos, { recursive: true });
+  // Clientes entram no portal de documentos (portalClientes) ou também abrem solicitações (acessoClientes).
+  const clientesEntram = acessoClientes || portalClientes;
 
   const rotas = [];
-  const rota = (metodo, padrao, handler, { publica = false, papel = null, admin = false } = {}) => {
+  // portal: rota liberada ao cliente que só tem o portal de documentos;
+  // bruto: corpo lido pelo handler (webhook), sem a exigência de JSON.
+  const rota = (metodo, padrao, handler, { publica = false, papel = null, admin = false, portal = false, bruto = false } = {}) => {
     const regex = new RegExp(`^${padrao.replace(/\./g, '\\.').replace(/:(\w+)/g, '(?<$1>\\d+)')}$`);
-    rotas.push({ metodo, regex, handler, publica, papel, admin });
+    rotas.push({ metodo, regex, handler, publica, papel, admin, portal, bruto });
   };
 
   // ---------- utilitários ----------
@@ -207,7 +213,7 @@ function criarApp({
       limitador.falhou(ip, email);
       throw new ErroValidacao('E-mail ou senha incorretos.', 401);
     }
-    if (usuario.papel === 'cliente' && !acessoClientes) {
+    if (usuario.papel === 'cliente' && !clientesEntram) {
       throw new ErroValidacao('O acesso de clientes está desativado. Fale com o escritório.', 403);
     }
     limitador.acertou(ip, email);
@@ -218,16 +224,18 @@ function criarApp({
   rota('POST', '/api/logout', ({ token, responder }) => {
     auth.encerrarSessao(db, token);
     responder(200, { ok: true }, { 'Set-Cookie': auth.cookieSessao('', { seguro: cookieSeguro }) });
-  });
+  }, { portal: true });
 
-  rota('GET', '/api/opcoes', () => ({ canais: CANAIS_PEDIDO, acesso_clientes: acessoClientes }));
+  rota('GET', '/api/opcoes', () => ({
+    canais: CANAIS_PEDIDO, acesso_clientes: acessoClientes, portal_clientes: portalClientes, clientes_entram: clientesEntram,
+  }), { portal: true });
 
   rota('GET', '/api/me', ({ usuario }) => {
     const empresa = usuario.empresa_id
       ? db.prepare('SELECT id, razao_social, cnpj FROM empresas WHERE id = ?').get(usuario.empresa_id)
       : null;
     return { ...usuario, empresa: empresa ? { ...empresa } : null };
-  });
+  }, { portal: true });
 
   rota('POST', '/api/me/senha', ({ usuario, corpo }) => {
     const atual = db.prepare('SELECT senha_hash FROM usuarios WHERE id = ?').get(usuario.id);
@@ -238,7 +246,7 @@ function criarApp({
     if (nova.length < 8) throw new ErroValidacao('A nova senha deve ter pelo menos 8 caracteres.');
     db.prepare('UPDATE usuarios SET senha_hash = ? WHERE id = ?').run(auth.gerarHash(nova), usuario.id);
     return { ok: true };
-  });
+  }, { portal: true });
 
   // ---------- empresas (clientes do escritório) ----------
 
@@ -482,7 +490,7 @@ function criarApp({
     const email = texto('E-mail', corpo.email, { obrigatorio: true, max: 200 });
     if (!emailValido(email)) throw new ErroValidacao('E-mail inválido.');
     const papel = corpo.papel === 'cliente' ? 'cliente' : 'escritorio';
-    if (papel === 'cliente' && !acessoClientes) throw new ErroValidacao('O acesso de clientes está desativado.');
+    if (papel === 'cliente' && !clientesEntram) throw new ErroValidacao('O acesso de clientes está desativado.');
     let empresaId = null;
     if (papel === 'cliente') {
       empresaId = Number(corpo.empresa_id);
@@ -807,6 +815,10 @@ function criarApp({
 
   registrarRotasOperacionais({ rota, db, pastaArquivos });
 
+  // ---------- Questor Zen (webhook) e portal do cliente ----------
+
+  registrarRotasZen({ rota, db, pastaArquivos, tokenWebhook: zenWebhookToken });
+
   // ---------- servidor HTTP ----------
 
   function servirEstatico(req, res, caminho) {
@@ -823,7 +835,17 @@ function criarApp({
     fs.createReadStream(completo).pipe(res);
   }
 
-  function lerCorpo(req) {
+  async function lerCorpo(req) {
+    const corpo = await lerBruto(req);
+    if (!corpo.length) return {};
+    try {
+      return JSON.parse(corpo.toString('utf8'));
+    } catch {
+      throw new ErroValidacao('JSON inválido.');
+    }
+  }
+
+  function lerBruto(req) {
     return new Promise((resolve, reject) => {
       const partes = [];
       let tamanho = 0;
@@ -836,14 +858,7 @@ function criarApp({
         }
         partes.push(parte);
       });
-      req.on('end', () => {
-        if (!partes.length) return resolve({});
-        try {
-          resolve(JSON.parse(Buffer.concat(partes).toString('utf8')));
-        } catch {
-          reject(new ErroValidacao('JSON inválido.'));
-        }
-      });
+      req.on('end', () => resolve(Buffer.concat(partes)));
       req.on('error', reject);
     });
   }
@@ -883,16 +898,19 @@ function criarApp({
 
       const token = auth.lerCookies(req.headers.cookie)[auth.NOME_COOKIE];
       let usuario = auth.usuarioDaSessao(db, token);
-      if (usuario?.papel === 'cliente' && !acessoClientes) usuario = null;
+      if (usuario?.papel === 'cliente' && !clientesEntram) usuario = null;
       if (!r.publica && !usuario) throw new ErroValidacao('Faça login para continuar.', 401);
+      if (usuario?.papel === 'cliente' && !acessoClientes && !r.portal && !r.publica) {
+        throw new ErroValidacao('Disponível só para a equipe do escritório.', 403);
+      }
       if (r.papel && usuario.papel !== r.papel) throw new ErroValidacao('Acesso restrito ao escritório.', 403);
       if (r.admin && !usuario.admin) throw new ErroValidacao('Ação permitida só para administradores.', 403);
 
       // Proteção contra CSRF: requisições que alteram dados precisam vir como JSON.
-      if (req.method !== 'GET' && !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
+      if (req.method !== 'GET' && !r.bruto && !String(req.headers['content-type'] ?? '').startsWith('application/json')) {
         throw new ErroValidacao('Envie os dados como application/json.', 415);
       }
-      const corpo = req.method === 'GET' ? {} : await lerCorpo(req);
+      const corpo = req.method === 'GET' || r.bruto ? {} : await lerCorpo(req);
 
       // Atrás de um proxy (Caddy), o IP real é o último do X-Forwarded-For (o que o proxy
       // acrescentou); os anteriores vêm do visitante e podem ser forjados.
@@ -901,7 +919,7 @@ function criarApp({
 
       let enviado = false;
       const ctx = {
-        usuario, token, params, corpo, ip, query: url.searchParams,
+        usuario, token, params, corpo, ip, query: url.searchParams, req, lerBruto: () => lerBruto(req),
         responder: (...a) => { enviado = true; responder(...a); },
         responderBruto: (...a) => { enviado = true; responderBruto(...a); },
       };

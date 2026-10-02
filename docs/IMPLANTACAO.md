@@ -149,3 +149,44 @@ Todos os comandos abaixo devem ser rodados dentro de `/opt/notas/deploy`.
 | "Muitas tentativas de login" | Por segurança, o login fica bloqueado por 15 minutos após 5 senhas erradas. Espere, ou redefina a senha. |
 | Esqueceu a senha do administrador | Use o comando de redefinir senha da seção 8. |
 | O servidor ficou sem espaço | Veja o tamanho da pasta com `du -sh /opt/notas/deploy/dados/*`. Os anexos são o que mais cresce. Se precisar, aumente o disco no painel do provedor. |
+
+## 10. Questor Zen: webhook e portal do cliente
+
+O Questor Zen avisa o sistema sempre que um documento é postado para um cliente (webhook). O
+documento aparece em **Questor Zen** (menu da equipe) e no **portal do cliente**, onde a empresa
+vê e baixa só os próprios documentos. O cliente não acessa notas, ocorrências nem relatórios.
+
+**1. Ligar no servidor.** Gere um token e acrescente duas linhas ao `deploy/.env`:
+
+```bash
+cd /opt/notas/deploy
+echo "ZEN_WEBHOOK_TOKEN=$(openssl rand -hex 32)" >> .env
+echo "PORTAL_CLIENTES=1" >> .env
+grep ZEN_WEBHOOK_TOKEN .env      # copie o valor para usar no Zen
+cd /opt/notas && sudo bash deploy/atualizar.sh
+```
+
+**2. Conferir no sistema.** Entre como administrador, abra **Questor Zen** e use **Simular
+recebimento** com uma empresa de teste. O documento deve aparecer na lista, já com a empresa.
+
+**3. Configurar no Zen.** Em **Configurações Gerais**, informe:
+
+- URL de retorno: `https://painel.contabilizatech.com.br/api/zen/webhook`
+- Autenticação: **Bearer Token**, com o valor de `ZEN_WEBHOOK_TOKEN`
+
+**4. Testar com um cliente.**
+
+1. Em **Empresas**, cadastre (ou use) a empresa de teste com a **mesma razão social** do cliente no
+   Zen. Diferenças de acento, pontuação e LTDA/ME/EPP são ignoradas.
+2. Em **Usuários**, crie um usuário com perfil **Cliente** para essa empresa, com um e-mail seu.
+3. No Zen, poste um documento (ex.: uma guia em PDF) para esse cliente.
+4. Em **Questor Zen**, o documento aparece em segundos. Clique nele para ver tudo o que o Zen
+   enviou (em **Dados recebidos do Zen**).
+5. Saia e entre com o usuário cliente: o documento está em **Meus documentos**.
+
+A empresa do documento é descoberta, nesta ordem, pelo e-mail do usuário cliente, por um CNPJ no
+nome, pela razão social ou por um documento anterior do mesmo cliente. Se ficar **Sem empresa**,
+abra o documento e escolha a empresa; os próximos do mesmo cliente seguem a escolha.
+
+Se nada chegar, veja `docker compose logs --tail 50 app` e confira no Zen a URL e o token. Uma
+resposta 401 significa token diferente; 503, que `ZEN_WEBHOOK_TOKEN` não está no `.env`.
